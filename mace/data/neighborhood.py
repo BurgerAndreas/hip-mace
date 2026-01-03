@@ -11,14 +11,34 @@ def get_neighborhood(
     cell: Optional[np.ndarray] = None,  # [3, 3]
     true_self_interaction=False,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Compute the graph neighborhood for a system of atoms, optionally considering periodic boundary conditions.
+    
+    Args:
+        positions (np.ndarray): Array of atomic positions of shape [num_positions, 3].
+        cutoff (float): Cutoff distance for neighbor search.
+        pbc (Optional[Tuple[bool, bool, bool]]): Tuple of booleans specifying which directions are periodic.
+            Defaults to (False, False, False) if not provided.
+        cell (Optional[np.ndarray]): Simulation cell as a (3, 3) matrix. If None or all zeros, replaced by identity.
+        true_self_interaction (bool): If True, retain self-edges (including those not crossing periodic boundaries).
+            If False, remove self-edges that do not cross periodic boundaries.
+    
+    Returns:
+        Tuple[
+            np.ndarray,  # edge_index: [2, n_edges] sender and receiver indices of edges
+            np.ndarray,  # shifts: [n_edges, 3] Cartesian vectors for periodic boundary offsets
+            np.ndarray,  # unit_shifts: [n_edges, 3] Unit cell Wigner-Seitz offsets (integers)
+            np.ndarray,  # cell: [3, 3] The possibly modified cell used internally
+        ]
+    """
     if pbc is None:
         pbc = (False, False, False)
 
     if cell is None or cell.any() == np.zeros((3, 3)).any():
         cell = np.identity(3, dtype=float)
 
-    assert len(pbc) == 3 and all(isinstance(i, (bool, np.bool_)) for i in pbc)
-    assert cell.shape == (3, 3)
+    assert len(pbc) == 3 and all(isinstance(i, (bool, np.bool_)) for i in pbc), f"{pbc}"
+    assert cell.shape == (3, 3), f"Cell shape is {cell.shape}, expected (3, 3)"
 
     pbc_x = pbc[0]
     pbc_y = pbc[1]

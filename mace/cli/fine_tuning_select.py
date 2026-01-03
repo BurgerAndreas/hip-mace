@@ -245,7 +245,7 @@ class FPS:
         """
         Assemble the descriptors for all the configurations.
         """
-        self.descriptors_dataset: np.ndarray = 10e10 * np.ones(
+        self.descriptors_dataset = 10e10 * np.ones(
             (
                 len(self.atoms_list),
                 len(self.species),

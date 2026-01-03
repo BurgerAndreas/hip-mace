@@ -57,7 +57,7 @@ class CheckpointIO:
         self.directory = directory
         self.tag = tag
         self.keep = keep
-        self.old_path: Optional[str] = None
+        self.old_path = None
         self.swa_start = swa_start
 
         self._epochs_string = "_epoch-"

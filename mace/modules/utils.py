@@ -263,6 +263,21 @@ def get_edge_vectors_and_lengths(
     normalize: bool = False,
     eps: float = 1e-9,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Computes the vectors and their lengths for edges in a graph, taking into account periodic boundary shifts.
+    
+    Args:
+        positions (torch.Tensor): Node positions of shape [n_nodes, 3].
+        edge_index (torch.Tensor): Edge indices of shape [2, n_edges], representing (sender, receiver) pairs.
+        shifts (torch.Tensor): Per-edge periodic boundary shifts of shape [n_edges, 3].
+        normalize (bool, optional): If True, returns normalized vectors. Defaults to False.
+        eps (float, optional): Small epsilon added to the denominator for numerical stability during normalization. Defaults to 1e-9.
+    
+    Returns:
+        Tuple[torch.Tensor, torch.Tensor]:
+            - vectors (torch.Tensor): Edge vectors of shape [n_edges, 3], optionally normalized.
+            - lengths (torch.Tensor): Lengths of edge vectors, shape [n_edges, 1].
+    """
     sender = edge_index[0]
     receiver = edge_index[1]
     vectors = positions[receiver] - positions[sender] + shifts  # [n_edges, 3]

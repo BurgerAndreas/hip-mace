@@ -194,7 +194,7 @@ class MACECalculator(Calculator):
 
             # Load models from files
             self.models = [
-                torch.load(f=model_path, map_location=device)
+                torch.load(f=model_path, map_location=device, weights_only=False)
                 for model_path in model_paths
             ]
 
@@ -255,7 +255,7 @@ class MACECalculator(Calculator):
         self.charges_key = charges_key
 
         try:
-            self.available_heads: List[str] = self.models[0].heads  # type: ignore
+            self.available_heads = self.models[0].heads  # type: ignore
         except AttributeError:
             self.available_heads = ["Default"]
         kwarg_head = kwargs.get("head", None)

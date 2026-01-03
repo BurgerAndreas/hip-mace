@@ -1,3 +1,57 @@
+# HIP-MACE
+
+An implementation of MACE as Hessian Interatomic Potential (HIP).
+HIPs are modifications of MLIPs to predict Hessians in addition to the force and energy.
+
+
+HIP was introduced in our paper https://arxiv.org/abs/2509.21624
+
+The original implementation of HIP for EquiformerV2 is here: https://github.com/BurgerAndreas/hip
+
+### Training HIP-MACE
+
+Setup the environment
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv sync
+```
+
+Download the data
+```bash
+export KAGGLEHUB_CACHE=/path/to/your/preferred/directory
+uv run scripts/download_horm_data_kaggle.py
+```
+
+Run a test
+```bash
+uv run tests/test_hip.py
+uv run tests/test_equivariance.py
+```
+
+Train HIP-MACE to overfit small subset of 100 datapoints
+```bash
+TBD
+```
+
+Train a full HIP-MACE run
+```bash
+TBD
+```
+
+Train a regular MACE model just energy and forces
+```bash
+TBD
+```
+
+Compare HIP-MACE to autograd Hessians from regular MACE
+```bash
+TBD
+```
+
+---
+---
+---
+
 # <span style="font-size:larger;">MACE</span>
 
 [![GitHub release](https://img.shields.io/github/release/ACEsuit/mace.svg)](https://GitHub.com/ACEsuit/mace/releases/)

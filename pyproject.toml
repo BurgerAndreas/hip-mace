@@ -5,6 +5,37 @@ requires = [
 ]
 build-backend = "setuptools.build_meta"
 
+[project]
+name = "mace-torch"
+version = "0.3.8"
+description = "MACE - Fast and accurate machine learning interatomic potentials with higher order equivariant message passing."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "torch>=1.12",
+    "e3nn==0.4.4",
+    "numpy",
+    "opt_einsum",
+    "ase",
+    "torch-ema",
+    "prettytable",
+    "matscipy",
+    "h5py",
+    "torchmetrics",
+    "python-hostlist",
+    "configargparse",
+    "GitPython",
+    "pyYAML",
+    "tqdm",
+    "lmdb",
+    "orjson",
+    "matplotlib",
+    "pandas",
+    "nvidia-ml-py",
+    "kagglehub",
+    "einops",
+]
+
 # Make isort compatible with black
 [tool.isort]
 profile = "black"

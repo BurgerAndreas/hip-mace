@@ -704,6 +704,7 @@ class RealAgnosticResidualInteractionBlock(InteractionBlock):
         lammps_class: Optional[Any] = None,
         lammps_natoms: Tuple[int, int] = (0, 0),
         first_layer: bool = False,
+        return_raw_messages: bool = False,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         n_real = lammps_natoms[0] if lammps_class is not None else None
         sc = self.skip_tp(node_feats, node_attrs)
@@ -723,7 +724,10 @@ class RealAgnosticResidualInteractionBlock(InteractionBlock):
         else:
             mji = self.conv_tp(
                 node_feats[edge_index[0]], edge_attrs, tp_weights
-            )  # [n_nodes, irreps]
+            )  # [n_edges, irreps] 
+            # raw messages per edge
+            if return_raw_messages:
+                return mji  
             message = scatter_sum(
                 src=mji, index=edge_index[1], dim=0, dim_size=node_feats.shape[0]
             )
@@ -978,7 +982,7 @@ class RealAgnosticDensityResidualInteractionBlock(InteractionBlock):
         message = self.linear(message) / (density + 1)
         return (
             self.reshape(message),
-            sc,
+            sc, # TensorProduct on skip connection
         )  # [n_nodes, channels, (lmax + 1)**2]
 
 

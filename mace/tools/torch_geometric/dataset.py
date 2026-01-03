@@ -80,7 +80,7 @@ class Dataset(torch.utils.data.Dataset):
         self.transform = transform
         self.pre_transform = pre_transform
         self.pre_filter = pre_filter
-        self._indices: Optional[Sequence] = None
+        self._indices = None
 
         if "download" in self.__class__.__dict__.keys():
             self._download()

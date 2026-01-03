@@ -20,6 +20,7 @@ from .blocks import (
     AtomicEnergiesBlock,
     EquivariantProductBasisBlock,
     InteractionBlock,
+    # RealAgnosticResidualInteractionBlock,
     LinearDipolePolarReadoutBlock,
     LinearDipoleReadoutBlock,
     LinearNodeEmbeddingBlock,
@@ -40,6 +41,7 @@ from .utils import (
     get_symmetric_displacement,
     prepare_graph,
 )
+from .hip import add_hessian_graph_batch, blocks3x3_to_hessian, irreps_to_cartesian_matrix
 
 
 @compile_mode("script")
@@ -78,6 +80,12 @@ class MACE(torch.nn.Module):
         oeq_config: Optional[Dict[str, Any]] = None,
         lammps_mliap: Optional[bool] = False,
         readout_cls: Optional[Type[NonLinearReadoutBlock]] = NonLinearReadoutBlock,
+        # Added for HIP Hessian prediction
+        hip: bool = True,
+        hessian_feature_dim: int = 32,
+        hessian_use_last_layer_only: bool = True,
+        hessian_r_max: float = 16.0,
+        hessian_edge_lmax: int = 3, # 2 or 3
     ):
         super().__init__()
         self.register_buffer(
@@ -110,6 +118,7 @@ class MACE(torch.nn.Module):
             irreps_out=node_feats_irreps,
             cueq_config=cueq_config,
         )
+        # adds up scalar irreps with even parity
         embedding_size = node_feats_irreps.count(o3.Irrep(0, 1))
         if embedding_specs is not None:
             self.embedding_specs = embedding_specs
@@ -209,10 +218,11 @@ class MACE(torch.nn.Module):
             )
 
         for i in range(num_interactions - 1):
-            if i == num_interactions - 2:
+            if i == (num_interactions - 2) and not hip:
+                # Select only scalars for last layer
                 hidden_irreps_out = str(
                     hidden_irreps[0]
-                )  # Select only scalars for last layer
+                )  
             else:
                 hidden_irreps_out = hidden_irreps
             inter = interaction_cls(
@@ -263,6 +273,74 @@ class MACE(torch.nn.Module):
                     )
                 )
 
+        self.hessian_use_last_layer_only = True
+        self.hip = hip
+        self.register_buffer(
+            "hessian_r_max", torch.tensor(hessian_r_max, dtype=torch.get_default_dtype())
+        )
+        if self.hip:
+            # consider adding one full layer here
+            # hessian_hidden_irreps = o3.Irreps("64x0e + 64x1o + 64x2e")
+            # self.hessian_interaction = interaction_cls(
+            #     node_attrs_irreps=node_attr_irreps,
+            #     node_feats_irreps=hidden_irreps,
+            #     edge_attrs_irreps=sh_irreps,
+            #     edge_feats_irreps=edge_feats_irreps,
+            #     target_irreps=interaction_irreps,
+            #     hidden_irreps=hessian_hidden_irreps,
+            #     avg_num_neighbors=avg_num_neighbors,
+            #     edge_irreps=edge_irreps,
+            #     radial_MLP=radial_MLP,
+            #     cueq_config=cueq_config,
+            #     oeq_config=oeq_config,
+            # )
+            # prod = EquivariantProductBasisBlock(
+            #     node_feats_irreps=interaction_irreps,
+            #     target_irreps=hessian_hidden_irreps, 
+            #     # ...
+            # )
+            
+            assert hidden_irreps.count(o3.Irrep(2, 1)) > 0, "Hessian requires 2e in hidden_irreps"
+            # The Hessian is an Even Parity object, 
+            # so we require "Cx0e + Cx1e + Cx2e" instead of the
+            # "Cx1o" used for forces. Luckily, the Tensor Product of two 
+            # Odd vectors (node feature $1o$ $\otimes$ edge attribute $1o$) 
+            # produces the required $0e, 1e, 2e$ output.
+            # hidden_irreps: The configuration of your main backbone (e.g., "128x0e + 32x1o")
+            # hessian_feature_dim: How many channels you want per L component (0,1,2)
+            
+            # Output Definition: 0e, 1e, 2e (All Even for Hessian)
+            hessian_out_irreps = o3.Irreps(f"{hessian_feature_dim}x0e + {hessian_feature_dim}x1e + {hessian_feature_dim}x2e")
+            
+            # Node Projector (for Diagonal)
+            # We assume node_feats already contains mixed parities ($0e, 1e or 1o, 2e$)
+            self.hessian_proj_nodes_layerwise = o3.Linear(
+                irreps_in=hidden_irreps, irreps_out=hessian_out_irreps
+            )
+
+            # Edge Extractor (for Off-Diagonal)
+            # Input 1: Node features of neighbor j (hidden_irreps)
+            # Input 2: Edge Geometry (Spherical Harmonics usually up to L=2 or 3)
+            # We assume edge_attrs are standard Spherical Harmonics (0e + 1o + 2e + ...)
+            # lmax=2 is sufficient, but lmax=3 adds a parity-correct path $1o \otimes 3o \to 2e$
+            sh_irreps = o3.Irreps.spherical_harmonics(lmax=hessian_edge_lmax) 
+            
+            self.hessian_spherical_harmonics = o3.SphericalHarmonics(
+                sh_irreps, normalize=True, normalization="component"
+            )
+            
+            self.edge_tp = o3.FullyConnectedTensorProduct(
+                irreps_in1=hidden_irreps,
+                irreps_in2=sh_irreps, 
+                irreps_out=hessian_out_irreps
+            )
+            
+            # Output: One channel per degree (1+3+5 = 9 total elements)
+            # All Even parity (e) for Hessian
+            # The Linear layer reduces multiplicity hessian_out_irreps -> 1
+            self.hessian_proj_nodes = o3.Linear(hessian_out_irreps, o3.Irreps("1x0e + 1x1e + 1x2e"))
+            self.hessian_proj_edges = o3.Linear(hessian_out_irreps, o3.Irreps("1x0e + 1x1e + 1x2e"))
+
     def forward(
         self,
         data: Dict[str, torch.Tensor],
@@ -275,7 +353,13 @@ class MACE(torch.nn.Module):
         compute_edge_forces: bool = False,
         compute_atomic_stresses: bool = False,
         lammps_mliap: bool = False,
+        # added for Hessian prediction
+        predict_hessian: bool = True, # HIP Hessian prediction
+        return_l_features: bool = False,
     ) -> Dict[str, Optional[torch.Tensor]]:
+        """ """
+        # L = sum_{i=0}^l (2l+1) = 1 + 3 + 5 + 7 + 9 + ...
+            
         # Setup
         ctx = prepare_graph(
             data,
@@ -356,12 +440,16 @@ class MACE(torch.nn.Module):
             node_attrs_slice = data["node_attrs"]
             if is_lammps and i > 0:
                 node_attrs_slice = node_attrs_slice[: lammps_natoms[0]]
+            # [BN, hidden_irreps, L], [BN, interaction_irreps]
+            # C = hidden_irreps
+            # interaction_irreps = 1*C + 3*C + 5*C + ... + (2l+1)*C
+            # sc = Self-Connection / Atomic Basis A 
             node_feats, sc = interaction(
-                node_attrs=node_attrs_slice,
-                node_feats=node_feats,
-                edge_attrs=edge_attrs,
-                edge_feats=edge_feats,
-                edge_index=data["edge_index"],
+                node_attrs=node_attrs_slice, # [BN, atomic_numers]
+                node_feats=node_feats, # [BN, hidden_irreps]
+                edge_attrs=edge_attrs, # [E, L]
+                edge_feats=edge_feats, # [E, Bessel]
+                edge_index=data["edge_index"], # [2, E]
                 cutoff=cutoff,
                 first_layer=(i == 0),
                 lammps_class=lammps_class,
@@ -369,24 +457,27 @@ class MACE(torch.nn.Module):
             )
             if is_lammps and i == 0:
                 node_attrs_slice = node_attrs_slice[: lammps_natoms[0]]
+            # [BN, hidden_irreps]
             node_feats = product(
                 node_feats=node_feats, sc=sc, node_attrs=node_attrs_slice
             )
             node_feats_concat.append(node_feats)
-
+        
+        # Mace typically has one energy readout per layer
+        # which are summed up
         for i, readout in enumerate(self.readouts):
             feat_idx = -1 if len(self.readouts) == 1 else i
             node_es = readout(node_feats_concat[feat_idx], node_heads)[
                 num_atoms_arange, node_heads
-            ]
+            ] # [BN]
             energy = scatter_sum(node_es, data["batch"], dim=0, dim_size=num_graphs)
-            energies.append(energy)
+            energies.append(energy) # [B]
             node_energies_list.append(node_es)
 
-        contributions = torch.stack(energies, dim=-1)
-        total_energy = torch.sum(contributions, dim=-1)
-        node_energy = torch.sum(torch.stack(node_energies_list, dim=-1), dim=-1)
-        node_feats_out = torch.cat(node_feats_concat, dim=-1)
+        contributions = torch.stack(energies, dim=-1) # [B, num_readouts]
+        total_energy = torch.sum(contributions, dim=-1) # [B]
+        node_energy = torch.sum(torch.stack(node_energies_list, dim=-1), dim=-1) # [BN]
+        # node_feats_out = torch.cat(node_feats_concat, dim=-1) # [BN, hidden_irreps*num_interactions]
 
         forces, virials, stress, hessian, edge_forces = get_outputs(
             energy=total_energy,
@@ -413,6 +504,110 @@ class MACE(torch.nn.Module):
                 batch=data["batch"],
                 cell=cell,
             )
+
+        ###############################
+        outputs = {}
+        if predict_hessian:
+            # Predict Hessian from l=0,1,2 features.
+            
+            # Compute the graph for the Hessian
+            # TODO: usually the graph is computed in AtomicData.__init__()
+            data = add_hessian_graph_batch(
+                data,
+                cutoff=self.hessian_r_max.item(),
+                # max_neighbors=self.max_neighbors,
+                # use_pbc=data["pbc"][-1] if len(data["pbc"]) > 3 else data["pbc"],
+                use_pbc=None,
+            )
+            # if otf_graph or not hasattr(data, "nedges_hessian"):
+            # else:
+            #     data = add_extra_props_for_hessian(data)
+            
+            # For the diagonal elements of the Hessian,
+            # we need node features of size [BN, L].
+            # We could get node features for example by:
+            # (1) reading out each layer's features similar to the energy,
+            # or aggregate by e.g. averaging,
+            # (2) only using the last layer's features,
+            # We could use either sc or node_feats after the product.
+            # Similarly, there are many ways to get off-diagonal features.
+            
+            edge_index_hessian = data["edge_index_hessian"]
+            edge_distance_hessian = data["edge_distance_hessian"]
+            edge_distance_vec_hessian = data["edge_distance_vec_hessian"]
+            
+            # TODO: consider different ones
+            edge_attrs_hessian = self.hessian_spherical_harmonics(
+                edge_distance_vec_hessian.to(node_feats.dtype)
+            )
+            
+            # Make l=0,1,2 node and edge features for the Hessian
+            diag_feats_list = []
+            off_diag_feats_list = []
+            for i, node_feats in enumerate(node_feats_concat):
+                # Decide whether to grab features now or wait for the end
+                is_last_layer = (i == len(self.interactions) - 1)
+                
+                if not self.hessian_use_last_layer_only or is_last_layer:
+                    # We need the spherical harmonics (edge_attrs) for the cross product
+                    # Ensure edge_attrs matches the lmax used in initialization
+                    # Diagonal Features (Per Node)
+                    # [BN, C] -> [BN, C']
+                    diag_feats = self.hessian_proj_nodes_layerwise(node_feats)
+                    
+                    # Off-Diagonal Features (Per Edge)
+                    # Select features of neighbor j (source node)
+                    # j->i convention
+                    # Mace edge_index contains both directions
+                    # so we are producing both i->j and j->i features
+                    # and need to symmetrize them later.
+                    j, i = edge_index_hessian # [E], [E]  
+                    h_j = node_feats[j] # [E, C]
+                    # TODO: consider full message passing
+                    # Compute TP(h_j, Y_ij) -> produces 0e, 1e, 2e
+                    off_diag_feats = self.edge_tp(
+                        h_j, 
+                        edge_attrs_hessian, # [E, L]
+                    )
+                    diag_feats_list.append(diag_feats)
+                    off_diag_feats_list.append(off_diag_feats)
+            
+            # Aggregation (if using multiple layers)
+            # [BN, out_irreps]
+            diag_out = torch.stack(diag_feats_list, dim=0).mean(dim=0) 
+            # [E, out_irreps]
+            off_diag_out = torch.stack(off_diag_feats_list, dim=0).mean(dim=0)
+            
+            # o3.Linear layer to project node_feats
+            # onto the target irreps 1x0e + 1x1e + 1x2e = 9
+            # Apply the linear projection to both diagonal and off-diagonal features
+            # diag_feats: [BN, 9]
+            diag_out = self.hessian_proj_nodes(diag_out)
+            # off_diag_feats: [E, 9]
+            off_diag_out = self.hessian_proj_edges(off_diag_out)
+            
+            # (E, 3, 3)
+            l012_edge_feat_3x3 = irreps_to_cartesian_matrix(
+                off_diag_out
+            )  
+            # (N, 3, 3)
+            l012_node_feat_3x3 = irreps_to_cartesian_matrix(diag_out)
+
+            hessian = blocks3x3_to_hessian(
+                edge_index=edge_index_hessian,
+                data=data,
+                l012_edge_features=l012_edge_feat_3x3,
+                l012_node_features=l012_node_feat_3x3,
+            )
+
+            if return_l_features:
+                outputs["l012_node_features"] = l012_node_feat_3x3
+                outputs["l012_edge_features"] = l012_edge_feat_3x3
+                outputs["l012_node_features_irreps"] = diag_out
+                outputs["l012_edge_features_irreps"] = off_diag_out
+
+        ###############################
+
         return {
             "energy": total_energy,
             "node_energy": node_energy,
@@ -424,10 +619,13 @@ class MACE(torch.nn.Module):
             "atomic_virials": atomic_virials,
             "atomic_stresses": atomic_stresses,
             "displacement": displacement,
+            # Hessian prediction will overwrite the autodiff Hessian
             "hessian": hessian,
-            "node_feats": node_feats_out,
+            **outputs,
         }
-
+    
+    def _predict_hessian(self, node_feats: torch.Tensor) -> torch.Tensor:
+        pass
 
 @compile_mode("script")
 class ScaleShiftMACE(MACE):
@@ -455,6 +653,11 @@ class ScaleShiftMACE(MACE):
         compute_atomic_stresses: bool = False,
         lammps_mliap: bool = False,
     ) -> Dict[str, Optional[torch.Tensor]]:
+        """
+        self.atomic_numbers: [Z_max]
+        node_attrs: [B*N, Z_max]
+        edge_index: [2, E]
+        """
         # Setup
         ctx = prepare_graph(
             data,
@@ -488,8 +691,11 @@ class ScaleShiftMACE(MACE):
         )  # [n_graphs, num_heads]
 
         # Embeddings
+        # [3, D1]
         node_feats = self.node_embedding(data["node_attrs"])
+        # [E, D2]
         edge_attrs = self.spherical_harmonics(vectors)
+        # [E, D3], None 
         edge_feats, cutoff = self.radial_embedding(
             lengths, data["node_attrs"], data["edge_index"], self.atomic_numbers
         )
@@ -534,6 +740,9 @@ class ScaleShiftMACE(MACE):
             node_attrs_slice = data["node_attrs"]
             if is_lammps and i > 0:
                 node_attrs_slice = node_attrs_slice[: lammps_natoms[0]]
+            # [N, D, L]
+            # where L=1+3+5+7+...
+            # sc = TensorProduct on skip connection
             node_feats, sc = interaction(
                 node_attrs=node_attrs_slice,
                 node_feats=node_feats,
@@ -547,11 +756,13 @@ class ScaleShiftMACE(MACE):
             )
             if is_lammps and i == 0:
                 node_attrs_slice = node_attrs_slice[: lammps_natoms[0]]
+            # [3, D1]
             node_feats = product(
                 node_feats=node_feats, sc=sc, node_attrs=node_attrs_slice
             )
             node_feats_list.append(node_feats)
-
+        
+        # all ?x0e
         for i, readout in enumerate(self.readouts):
             feat_idx = -1 if len(self.readouts) == 1 else i
             node_es_list.append(
@@ -559,7 +770,7 @@ class ScaleShiftMACE(MACE):
                     num_atoms_arange, node_heads
                 ]
             )
-
+        
         node_feats_out = torch.cat(node_feats_list, dim=-1)
         node_inter_es = torch.sum(torch.stack(node_es_list, dim=0), dim=0)
         node_inter_es = self.scale_shift(node_inter_es, node_heads)
@@ -568,6 +779,7 @@ class ScaleShiftMACE(MACE):
         total_energy = e0 + inter_e
         node_energy = node_e0.clone().double() + node_inter_es.clone().double()
 
+        # compute forces via autograd
         forces, virials, stress, hessian, edge_forces = get_outputs(
             energy=inter_e,
             positions=positions,
@@ -593,6 +805,7 @@ class ScaleShiftMACE(MACE):
                 batch=data["batch"],
                 cell=cell,
             )
+        # self._predict_hessian(node_feats_out)
         return {
             "energy": total_energy,
             "node_energy": node_energy,
@@ -607,6 +820,7 @@ class ScaleShiftMACE(MACE):
             "displacement": displacement,
             "node_feats": node_feats_out,
         }
+        
 
 
 @compile_mode("script")
