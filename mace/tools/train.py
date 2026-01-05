@@ -298,6 +298,8 @@ def train(
                                 ],
                                 "valid_rmse_f": eval_metrics["rmse_f"],
                             }
+                            if "mae_h" in eval_metrics:
+                                wandb_log_dict[valid_loader_name]["valid_mae_h"] = eval_metrics["mae_h"]
                 if plotter and epoch % plotter.plot_frequency == 0:
                     try:
                         plotter.plot(epoch, model_to_evaluate, rank)

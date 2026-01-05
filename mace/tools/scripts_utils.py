@@ -848,7 +848,7 @@ def setup_wandb(args: argparse.Namespace):
     args_dict_json = json.dumps(args_dict, cls=CustomEncoder)
     if args.wandb_log_hypers is None:
         # log all hyperparameters
-        args.wandb_log_hypers = list(args_dict.keys())
+        wandb_config = args_dict
     else:
         for key in args.wandb_log_hypers:
             wandb_config[key] = args_dict[key]

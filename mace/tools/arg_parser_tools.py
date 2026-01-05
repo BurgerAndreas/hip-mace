@@ -1,5 +1,6 @@
 import logging
 import os
+import time
 
 from e3nn import o3
 
@@ -13,14 +14,15 @@ def check_args(args):
 
     # Directories
     # Use work_dir for all other directories as well, unless they were specified by the user
+    run_id = time.strftime("%Y%m%d_%H%M%S")
     if args.log_dir is None:
-        args.log_dir = os.path.join(args.work_dir, "logs")
+        args.log_dir = os.path.join(args.work_dir, "logs", run_id)
     if args.model_dir is None:
         args.model_dir = args.work_dir
     if args.checkpoints_dir is None:
-        args.checkpoints_dir = os.path.join(args.work_dir, "checkpoints")
+        args.checkpoints_dir = os.path.join(args.work_dir, "checkpoints", run_id)
     if args.results_dir is None:
-        args.results_dir = os.path.join(args.work_dir, "results")
+        args.results_dir = os.path.join(args.work_dir, "results", run_id)
     if args.downloads_dir is None:
         args.downloads_dir = os.path.join(args.work_dir, "downloads")
 
