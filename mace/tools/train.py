@@ -10,6 +10,7 @@ import time
 from collections import defaultdict
 from contextlib import nullcontext
 from typing import Any, Dict, List, Optional, Tuple, Union
+import warnings
 
 import numpy as np
 import torch
@@ -35,6 +36,13 @@ from .utils import (
     compute_rel_rmse,
     compute_rmse,
     filter_nonzero_weight,
+)
+
+# Suppress TorchScript type annotation warnings
+warnings.filterwarnings(
+    "ignore", 
+    message=".*TorchScript type system doesn't support instance-level annotations.*",
+    category=UserWarning
 )
 
 
@@ -125,6 +133,13 @@ def valid_err_log(
         error_f = eval_metrics["mae_f"] * 1e3
         logging.info(
             f"{inintial_phrase}: head: {valid_loader_name}, loss={valid_loss:8.8f}, MAE_E={error_e:8.2f} meV, MAE_F={error_f:8.2f} meV / A",
+        )
+    elif log_errors == "TotalMAEHessian":
+        error_e = eval_metrics["mae_e"] * 1e3
+        error_f = eval_metrics["mae_f"] * 1e3
+        error_h = eval_metrics["mae_h"] * 1e3
+        logging.info(
+            f"{inintial_phrase}: head: {valid_loader_name}, loss={valid_loss:8.8f}, MAE_E={error_e:8.2f} meV, MAE_F={error_f:8.2f} meV / A, MAE_H={error_h:8.2f} meV / A^2",
         )
     elif log_errors == "DipoleRMSE":
         error_mu = eval_metrics["rmse_mu_per_atom"] * 1e3
@@ -413,6 +428,7 @@ def take_step(
             compute_force=output_args["forces"],
             compute_virials=output_args["virials"],
             compute_stress=output_args["stress"],
+            predict_hessian=output_args["hip"]
         )
         loss = loss_fn(pred=output, ref=batch)
         loss.backward()
@@ -487,6 +503,7 @@ def take_step_lbfgs(
                 compute_force=output_args["forces"],
                 compute_virials=output_args["virials"],
                 compute_stress=output_args["stress"],
+                predict_hessian=output_args["hip"],
             )
             batch_loss = loss_fn(pred=output, ref=batch)
             batch_loss = batch_loss * (batch.num_graphs / total_sample_count)
@@ -553,6 +570,7 @@ def evaluate(
             compute_force=output_args["forces"],
             compute_virials=output_args["virials"],
             compute_stress=output_args["stress"],
+            predict_hessian=output_args["hip"],
         )
         avg_loss, aux = metrics(batch, output)
 
@@ -578,6 +596,9 @@ class MACELoss(Metric):
         self.add_state("Fs_computed", default=torch.tensor(0.0), dist_reduce_fx="sum")
         self.add_state("fs", default=[], dist_reduce_fx="cat")
         self.add_state("delta_fs", default=[], dist_reduce_fx="cat")
+        self.add_state("H_computed", default=torch.tensor(0.0), dist_reduce_fx="sum")
+        self.add_state("delta_hs", default=[], dist_reduce_fx="cat")
+        # self.add_state("delta_hs_per_atom", default=[], dist_reduce_fx="cat")
         self.add_state(
             "stress_computed", default=torch.tensor(0.0), dist_reduce_fx="sum"
         )
@@ -613,7 +634,7 @@ class MACELoss(Metric):
                 batch, self.delta_es, batch.weight, batch.energy_weight
             )
         if output.get("forces") is not None and batch.forces is not None:
-            self.fs.append(batch.forces)
+            self.fs.append(batch.forces) # [BN, 3]
             self.delta_fs.append(batch.forces - output["forces"])
             self.Fs_computed += filter_nonzero_weight(
                 batch,
@@ -622,6 +643,13 @@ class MACELoss(Metric):
                 batch.forces_weight,
                 spread_atoms=True,
             )
+        # for HIP
+        if output.get("hessian", None) is not None and batch.hessian is not None:
+            self.delta_hs.append(batch.hessian - output["hessian"])
+            self.H_computed += 1.0  # TODO@HIP add proper filtering
+            # self.H_computed += filter_nonzero_weight(
+            #     batch, self.delta_hs, batch.weight, batch.hessian_weight
+            # )
         if output.get("stress") is not None and batch.stress is not None:
             self.delta_stress.append(batch.stress - output["stress"])
             self.stress_computed += filter_nonzero_weight(
@@ -707,6 +735,10 @@ class MACELoss(Metric):
             aux["rmse_f"] = compute_rmse(delta_fs)
             aux["rel_rmse_f"] = compute_rel_rmse(delta_fs, fs)
             aux["q95_f"] = compute_q95(delta_fs)
+        # for HIP
+        if self.H_computed:
+            delta_hs = self.convert(self.delta_hs)
+            aux["mae_h"] = compute_mae(delta_hs)
         if self.stress_computed:
             delta_stress = self.convert(self.delta_stress)
             aux["mae_stress"] = compute_mae(delta_stress)

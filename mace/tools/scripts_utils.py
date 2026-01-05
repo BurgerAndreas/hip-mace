@@ -623,6 +623,12 @@ def get_loss_fn(
             energy_weight=args.energy_weight,
             forces_weight=args.forces_weight,
         )
+    elif args.loss == "l1l2l1energyforceshessian":
+        loss_fn = modules.WeightedEnergyForcesHessianL1L2L1Loss(
+            energy_weight=args.energy_weight,
+            forces_weight=args.forces_weight,
+            hessian_weight=args.hessian_weight,
+        )
     elif args.loss == "dipole":
         assert (
             dipole_only is True

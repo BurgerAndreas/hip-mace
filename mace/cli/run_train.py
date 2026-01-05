@@ -81,6 +81,9 @@ def run(args) -> None:
     """
     This script runs the training/fine tuning for mace
     """
+    # Set environment variable to allow weights_only=False in torch.load
+    os.environ["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] = "1"
+    
     tag = tools.get_tag(name=args.name, seed=args.seed)
     args, input_log_messages = tools.check_args(args)
 
@@ -541,23 +544,23 @@ def run(args) -> None:
 
         if ase_files:
             dataset = load_dataset_for_path(
-            file_path=ase_files,
-            r_max=args.r_max,
-            z_table=z_table,
-            head_config=head_config,
-            heads=heads,
-            collection=head_config.collections.train,
+                file_path=ase_files,
+                r_max=args.r_max,
+                z_table=z_table,
+                head_config=head_config,
+                heads=heads,
+                collection=head_config.collections.train,
             )
             train_datasets.append(dataset)
             logging.debug(f"Successfully loaded dataset from ASE files: {ase_files}")
 
         for file in non_ase_files:
             dataset = load_dataset_for_path(
-            file_path=file,
-            r_max=args.r_max,
-            z_table=z_table,
-            head_config=head_config,
-            heads=heads,
+                file_path=file,
+                r_max=args.r_max,
+                z_table=z_table,
+                head_config=head_config,
+                heads=heads,
             )
             train_datasets.append(dataset)
             logging.debug(f"Successfully loaded dataset from non-ASE file: {file}")
@@ -586,12 +589,12 @@ def run(args) -> None:
                 logging.debug(f"Successfully loaded validation dataset from ASE files: {valid_ase_files}")
             for valid_file in valid_non_ase_files:
                 valid_dataset = load_dataset_for_path(
-                file_path=valid_file,
-                r_max=args.r_max,
-                z_table=z_table,
-                head_config=head_config,
-                heads=heads,
-            )
+                    file_path=valid_file,
+                    r_max=args.r_max,
+                    z_table=z_table,
+                    head_config=head_config,
+                    heads=heads,
+                )
                 valid_datasets.append(valid_dataset)
                 logging.debug(f"Successfully loaded validation dataset from {valid_file}")
 

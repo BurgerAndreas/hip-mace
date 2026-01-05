@@ -34,6 +34,7 @@ def configure_model(
     output_args = {
         "energy": args.compute_energy,
         "forces": args.compute_forces,
+        "hip": args.predict_hessian, # for HIP
         "virials": compute_virials,
         "stress": compute_stress,
         "dipoles": args.compute_dipole,
@@ -186,6 +187,12 @@ def configure_model(
             use_reduced_cg=args.use_reduced_cg,
             use_so3=args.use_so3,
             cueq_config=cueq_config,
+            # Added for HIP Hessian prediction
+            hip=args.hip,
+            hessian_feature_dim=args.hessian_feature_dim,
+            hessian_use_last_layer_only=args.hessian_use_last_layer_only,
+            hessian_r_max=args.hessian_r_max,
+            hessian_edge_lmax=args.hessian_edge_lmax,
         )
         model_config_foundation = None
 

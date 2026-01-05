@@ -56,6 +56,9 @@ def get_neighborhood(
         cell[2, :] = max_positions * 5 * cutoff * identity[2, :]
 
     sender, receiver, unit_shifts = neighbour_list(
+        # i : first atom index - j : second atom index 
+        # d : absolute distance - D : distance vector 
+        # S : shift vector (number of cell boundaries crossed by the bond between atom i and j)
         quantities="ijS",
         pbc=pbc,
         cell=cell,

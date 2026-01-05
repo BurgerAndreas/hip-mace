@@ -212,7 +212,7 @@ class Data(object):
         """
         if hasattr(self, "__num_nodes__"):
             return self.__num_nodes__
-        for key, item in self("x", "pos", "normal", "batch"):
+        for key, item in self("x", "positions", "normal", "batch"):
             return item.size(self.__cat_dim__(key, item))
         if hasattr(self, "adj"):
             return self.adj.size(0)

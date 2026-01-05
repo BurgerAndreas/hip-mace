@@ -125,6 +125,7 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
             "DipoleMAE",
             "DipolePolarRMSE",
             "EnergyDipoleRMSE",
+            "TotalMAEHessian", # for HIP
         ],
         default="PerAtomRMSE",
     )
@@ -251,6 +252,38 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--num_interactions", help="number of interactions", type=int, default=2
     )
+
+    # HIP / Hessian prediction options
+    parser.add_argument(
+        "--hip",
+        help="Enable HIP Hessian prediction (internal flag)",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
+        "--hessian_feature_dim",
+        help="Number of feature channels per L for Hessian projection",
+        type=int,
+        default=32,
+    )
+    parser.add_argument(
+        "--hessian_use_last_layer_only",
+        help="Use only last layer features for Hessian prediction",
+        type=str2bool,
+        default=True,
+    )
+    parser.add_argument(
+        "--hessian_r_max",
+        help="Cutoff radius for Hessian graph (Angstrom)",
+        type=float,
+        default=16.0,
+    )
+    parser.add_argument(
+        "--hessian_edge_lmax",
+        help="Max l for spherical harmonics used in Hessian edge features (2 or 3)",
+        type=int,
+        default=3,
+    )
     parser.add_argument(
         "--MLP_irreps",
         help="hidden irreps of the MLP in last readout",
@@ -323,6 +356,12 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--compute_forces",
         help="Select True to compute forces",
+        type=str2bool,
+        default=True,
+    )
+    parser.add_argument(
+        "--predict_hessian",
+        help="Select True to predict Hessian with HIP",
         type=str2bool,
         default=True,
     )
@@ -549,6 +588,12 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=DefaultKeys.FORCES.value,
     )
     parser.add_argument(
+        "--hessian_key",
+        help="Key of reference hessian in training xyz",
+        type=str,
+        default=DefaultKeys.HESSIAN.value,
+    )
+    parser.add_argument(
         "--virials_key",
         help="Key of reference virials in training xyz",
         type=str,
@@ -649,6 +694,7 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
             "universal",
             "energy_forces_dipole",
             "l1l2energyforces",
+            "l1l2l1energyforceshessian", # for HIP
         ],
     )
     parser.add_argument(
@@ -666,12 +712,23 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         "--energy_weight", help="weight of energy loss", type=float, default=1.0
     )
     parser.add_argument(
+        "--hessian_weight", help="weight of hessian loss", type=float, default=1.0
+    )
+    parser.add_argument(
         "--swa_energy_weight",
         "--stage_two_energy_weight",
         help="weight of energy loss after starting Stage Two (previously called swa)",
         type=float,
         default=1000.0,
         dest="swa_energy_weight",
+    )
+    parser.add_argument(
+        "--swa_hessian_weight",
+        "--stage_two_hessian_weight",
+        help="weight of hessian loss after starting Stage Two (previously called swa)",
+        type=float,
+        default=1000.0,
+        dest="swa_hessian_weight",
     )
     parser.add_argument(
         "--virials_weight", help="weight of virials loss", type=float, default=1.0
@@ -903,7 +960,7 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--wandb",
         help="Use Weights and Biases for experiment tracking",
-        action="store_true",
+        type=str2bool,
         default=False,
     )
     parser.add_argument(
@@ -1035,6 +1092,12 @@ def build_preprocess_arg_parser() -> argparse.ArgumentParser:
         help="Key of reference forces in training xyz",
         type=str,
         default=DefaultKeys.FORCES.value,
+    )
+    parser.add_argument(
+        "--hessian_key",
+        help="Key of reference hessian in training xyz",
+        type=str,
+        default=DefaultKeys.HESSIAN.value,
     )
     parser.add_argument(
         "--virials_key",

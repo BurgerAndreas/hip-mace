@@ -18,6 +18,7 @@ build/
 .vscode/
 *.txt
 *.log
+.github/
 
 # Distribution
 dist/

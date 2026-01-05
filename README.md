@@ -1,8 +1,8 @@
 # HIP-MACE
 
 An implementation of MACE as Hessian Interatomic Potential (HIP).
-HIPs are modifications of MLIPs to predict Hessians in addition to the force and energy.
-
+HIPs are MLIPs that predict the Hessian in addition to the force and energy.
+The Hessian is the second derivative of the energy with respect to the input atom coordinates.
 
 HIP was introduced in our paper https://arxiv.org/abs/2509.21624
 
@@ -16,21 +16,26 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uv sync
 ```
 
-Download the data
-```bash
-export KAGGLEHUB_CACHE=/path/to/your/preferred/directory
-uv run scripts/download_horm_data_kaggle.py
-```
-
-Run a test
+Test HIP-MACE
 ```bash
 uv run tests/test_hip.py
 uv run tests/test_equivariance.py
 ```
 
-Train HIP-MACE to overfit small subset of 100 datapoints
+Download the data from https://huggingface.co/andreasburger/hip
 ```bash
 TBD
+```
+
+Train HIP-MACE to overfit a small subset of 100 datapoints
+```bash
+# with HIP
+uv run scripts/run_train.py --config=configs/horm100.yaml --hidden_irreps="128x0e + 128x1o + 128x2e" --hip=true --loss="l1l2l1energyforceshessian" --predict_hessian=true --error_table="TotalMAEHessian"
+# --batch_size=4 --valid_batch_size=4
+
+# without HIP (energy and forces)
+uv run scripts/run_train.py --config=configs/horm100.yaml
+uv run scripts/run_train.py --config=configs/horm100.yaml --hidden_irreps="128x0e + 128x1o + 128x2e"
 ```
 
 Train a full HIP-MACE run
@@ -46,6 +51,18 @@ TBD
 Compare HIP-MACE to autograd Hessians from regular MACE
 ```bash
 TBD
+```
+
+Note: how we processed the data
+```bash
+# download the HORM dataset
+export KAGGLEHUB_CACHE=/path/to/your/preferred/directory
+uv run scripts/download_horm_data_kaggle.py
+# process the data
+uv run scripts/convert_lmdb_to_h5.py --in_file "data/sample_100.lmdb" 
+uv run scripts/convert_lmdb_to_h5.py --in_file "ts1x-val.lmdb" 
+uv run scripts/convert_lmdb_to_h5.py --in_file "ts1x_hess_train_big.lmdb" 
+uv run scripts/convert_lmdb_to_h5.py --in_file "RGD1.lmdb" 
 ```
 
 ---

@@ -1,4 +1,5 @@
 import torch
+import numpy as np
 
 from e3nn import o3
 
@@ -9,10 +10,12 @@ from mace.tools.torch_geometric.batch import Batch as TGBatch
 from mace.data import get_neighborhood
 from .utils import get_edge_vectors_and_lengths
 
+try:
+    from mace.modules.ocp_graph_utils import generate_graph
+except ImportError as e:
+    generate_graph = None
+    print(f"Error importing ocp_graph_utils: {e}. Using slower loop without torch_geometric.")
 
-# l0_features = x_message.embedding.narrow(dimension=1, start=0, length=1)
-# l1_features = x_message.embedding.narrow(dimension=1, start=1, length=3)
-# l2_features = x_message.embedding.narrow(dim=1, start=4, length=5) # length=2l+1
 def irreps_to_cartesian_matrix(irreps: torch.Tensor) -> torch.Tensor:
     """
     irreps: torch.Tensor [N, 9] or [E, 9]
@@ -398,30 +401,78 @@ def add_hessian_graph_batch(
     data["natoms"] = torch.bincount(data["batch"])
 
     # 1) Generate batched Hessian graph
-    # (
-    #     edge_index_hessian,
-    #     edge_distance_hessian,
-    #     edge_distance_vec_hessian,
-    #     cell_offsets_hessian,
-    #     cell_offset_distances_hessian,
-    #     neighbors_hessian,
-    # ) = generate_graph(
-    #     data,
-    #     cutoff=cutoff,
-    #     max_neighbors=max_neighbors,
-    #     use_pbc=use_pbc,
-    # )
-    edge_index_hessian, shifts_hessian, unit_shifts, cell = get_neighborhood(
-        positions=data["positions"].detach().cpu().numpy(), 
-        cutoff=cutoff, pbc=use_pbc, cell=None
-    )
-    edge_index_hessian = torch.from_numpy(edge_index_hessian).to(device=device)
-    shifts_hessian = torch.from_numpy(shifts_hessian).to(device=device, dtype=dtype)
-    edge_distance_vec_hessian, edge_distance_hessian = get_edge_vectors_and_lengths(
-        positions=data["positions"],
-        edge_index=edge_index_hessian,
-        shifts=shifts_hessian,
-    )
+    if generate_graph is not None:
+        # Use torch_geometric like fairchem / EquiformerV2
+        (
+            edge_index_hessian,
+            edge_distance_hessian,
+            edge_distance_vec_hessian,
+            cell_offsets_hessian,
+            cell_offset_distances_hessian,
+            neighbors_hessian,
+        ) = generate_graph(
+            data,
+            cutoff=cutoff,
+            use_pbc=use_pbc,
+        )
+        
+    else:
+        # Use slower loop without torch_geometric
+        # using Mace functions
+        device = data["positions"].device
+        dtype = data["positions"].dtype
+        
+        positions_np = data["positions"].detach().cpu().numpy()
+        batch_np = data["batch"].detach().cpu().numpy()
+        
+        edge_indices_list = []
+        shifts_list = []
+        edge_vec_list = []
+        edge_len_list = []
+        
+        # Iterate over each graph in the batch individually
+        num_graphs = batch_np.max() + 1
+        for b_idx in range(num_graphs):
+            # Extract positions for just this graph
+            mask = (batch_np == b_idx)
+            pos_b = positions_np[mask]
+            
+            # Get neighbors for this isolated graph
+            edge_index_b, shifts_b, _, _ = get_neighborhood(
+                positions=pos_b, 
+                cutoff=cutoff, 
+                pbc=use_pbc, 
+                cell=None
+            )
+            
+            # Convert to torch
+            edge_index_b = torch.from_numpy(edge_index_b).to(device)
+            shifts_b = torch.from_numpy(shifts_b).to(device, dtype=dtype)
+            
+            # Offset indices to match global batch numbering
+            # Find the global index of the first atom in this batch
+            global_offset = np.where(mask)[0][0]
+            edge_index_b += global_offset
+            
+            # Calculate vectors immediately to avoid complex re-indexing later
+            # (Or you can concatenate positions and do it after, but this is cleaner)
+            pos_b_tensor = data["positions"][mask]
+            vec_b, len_b = get_edge_vectors_and_lengths(
+                positions=pos_b_tensor,
+                edge_index=edge_index_b - global_offset, # Use local 0-based index for pos access
+                shifts=shifts_b,
+            )
+            
+            edge_indices_list.append(edge_index_b)
+            shifts_list.append(shifts_b)
+            edge_vec_list.append(vec_b)
+            edge_len_list.append(len_b)
+
+        # Concatenate everything back into single tensors
+        edge_index_hessian = torch.cat(edge_indices_list, dim=1)
+        shifts_hessian = torch.cat(shifts_list, dim=0)
+        edge_distance_vec_hessian = torch.cat(edge_vec_list, dim=0)
+        edge_distance_hessian = torch.cat(edge_len_list, dim=0)
 
     data["edge_index_hessian"] = edge_index_hessian
     data["edge_distance_hessian"] = edge_distance_hessian
@@ -555,7 +606,7 @@ if __name__ == "__main__":
         )
 
         # Precompute edge message indices for offdiagonal entries in the hessian
-        # TODO: only works for a single sample, not for a batch
+        # only works for a single sample, not for a batch
         N = data["natoms"].sum().item()  # Number of atoms
         indices_ij, indices_ji = (
             _get_indexadd_offdiagonal_to_flat_hessian_message_indices(
@@ -567,7 +618,7 @@ if __name__ == "__main__":
         data["message_idx_ji"] = indices_ji
 
         # Precompute node message indices for diagonal entries in the hessian
-        # TODO: only works for a single sample, not for a batch
+        # only works for a single sample, not for a batch
         diag_ij, diag_ji, node_transpose_idx = _get_node_diagonal_1d_indexadd_indices(
             N=N, device=data["positions"].device
         )

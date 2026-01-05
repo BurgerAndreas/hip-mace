@@ -49,6 +49,13 @@ def update_keyspec_from_kwargs(
     keyspec: KeySpecification, keydict: Dict[str, str]
 ) -> KeySpecification:
     # convert command line style property_key arguments into a keyspec
+
+    # The difference between 'infos' and 'arrays':
+    # 'infos' correspond to properties that are stored in the .info dictionary of an ASE Atoms object 
+    # (i.e., per-structure or scalar properties such as energy, stress, head, etc.)
+    # 'arrays' correspond to properties that are stored in the .arrays dictionary of an ASE Atoms object
+    # (i.e., per-atom or array-like properties such as forces and charges).
+
     infos = [
         "energy_key",
         "stress_key",
@@ -60,7 +67,11 @@ def update_keyspec_from_kwargs(
         "polarizability_key",
         "total_spin_key",
     ]
-    arrays = ["forces_key", "charges_key"]
+    arrays = [
+        "forces_key", 
+        "hessian_key", 
+        "charges_key"
+    ]
     info_keys = {}
     arrays_keys = {}
     for key in infos:
@@ -225,10 +236,12 @@ def load_from_xyz(
     atoms_list = ase.io.read(file_path, index=":")
     energy_key = key_specification.info_keys["energy"]
     forces_key = key_specification.arrays_keys["forces"]
+    hessian_key = key_specification.arrays_keys["hessian"]
     stress_key = key_specification.info_keys["stress"]
     head_key = key_specification.info_keys["head"]
     original_energy_key = energy_key
     original_forces_key = forces_key
+    original_hessian_key = hessian_key
     original_stress_key = stress_key
     if energy_key == "energy":
         logging.warning(
@@ -383,10 +396,12 @@ def save_AtomicData_to_HDF5(data, i, h5_file) -> None:
     grp["weight"] = data.weight
     grp["energy_weight"] = data.energy_weight
     grp["forces_weight"] = data.forces_weight
+    grp["hessian_weight"] = data.hessian_weight
     grp["stress_weight"] = data.stress_weight
     grp["virials_weight"] = data.virials_weight
     grp["forces"] = data.forces
     grp["energy"] = data.energy
+    grp["hessian"] = data.hessian
     grp["stress"] = data.stress
     grp["virials"] = data.virials
     grp["dipole"] = data.dipole

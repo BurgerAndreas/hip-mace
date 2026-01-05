@@ -79,6 +79,23 @@ def weighted_mean_absolute_error_energy(
     )
     return reduce_loss(raw_loss, ddp)
 
+# ------------------------------------------------------------------------------
+# Hessian Loss Functions
+# ------------------------------------------------------------------------------
+
+
+def mean_squared_error_hessian(
+    ref: Batch, pred: TensorDict, ddp: Optional[bool] = None
+) -> torch.Tensor:
+    raw_loss = torch.square(ref["hessian"] - pred["hessian"])
+    return reduce_loss(raw_loss, ddp)
+
+
+def mean_absolute_error_hessian(
+    ref: Batch, pred: TensorDict, ddp: Optional[bool] = None
+) -> torch.Tensor:
+    raw_loss = torch.abs(ref["hessian"] - pred["hessian"])
+    return reduce_loss(raw_loss, ddp)
 
 # ------------------------------------------------------------------------------
 # Stress and Virials Loss Functions
@@ -601,6 +618,7 @@ class WeightedEnergyForcesDipoleLoss(torch.nn.Module):
 
 class WeightedEnergyForcesL1L2Loss(torch.nn.Module):
     def __init__(self, energy_weight=1.0, forces_weight=1.0) -> None:
+        """L1 loss (Mean Absolute Error) per atom for energy + L2 loss (Mean Squared Error) for forces."""
         super().__init__()
         self.register_buffer(
             "energy_weight",
@@ -617,6 +635,37 @@ class WeightedEnergyForcesL1L2Loss(torch.nn.Module):
         loss_energy = weighted_mean_absolute_error_energy(ref, pred, ddp)
         loss_forces = mean_normed_error_forces(ref, pred, ddp)
         return self.energy_weight * loss_energy + self.forces_weight * loss_forces
+
+    def __repr__(self):
+        return (
+            f"{self.__class__.__name__}(energy_weight={self.energy_weight:.3f}, "
+            f"forces_weight={self.forces_weight:.3f})"
+        )
+
+class WeightedEnergyForcesHessianL1L2L1Loss(torch.nn.Module):
+    def __init__(self, energy_weight=1.0, forces_weight=1.0, hessian_weight=1.0) -> None:
+        """L1 loss (Mean Absolute Error) per atom for energy + L1 loss (Mean Absolute Error) for forces."""
+        super().__init__()
+        self.register_buffer(
+            "energy_weight",
+            torch.tensor(energy_weight, dtype=torch.get_default_dtype()),
+        )
+        self.register_buffer(
+            "forces_weight",
+            torch.tensor(forces_weight, dtype=torch.get_default_dtype()),
+        )
+        self.register_buffer(
+            "hessian_weight",
+            torch.tensor(hessian_weight, dtype=torch.get_default_dtype()),
+        )
+
+    def forward(
+        self, ref: Batch, pred: TensorDict, ddp: Optional[bool] = None
+    ) -> torch.Tensor:
+        loss_energy = weighted_mean_absolute_error_energy(ref, pred, ddp)
+        loss_forces = mean_normed_error_forces(ref, pred, ddp)
+        loss_hessian = mean_absolute_error_hessian(ref, pred, ddp)
+        return (self.energy_weight * loss_energy) + (self.forces_weight * loss_forces) + (self.hessian_weight * loss_hessian)
 
     def __repr__(self):
         return (
