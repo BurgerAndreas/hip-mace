@@ -156,7 +156,10 @@ class CheckpointIO:
     ) -> None:
         if not self.keep and self.old_path and not keep_last:
             logging.debug(f"Deleting old checkpoint file: {self.old_path}")
-            os.remove(self.old_path)
+            try:
+                os.remove(self.old_path)
+            except:
+                pass
 
         filename = self._get_checkpoint_filename(epochs, self.swa_start)
         path = os.path.join(self.directory, filename)

@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 from typing import Dict, List, Optional
 import traceback
+from tqdm import tqdm
 
 import h5py
 import numpy as np
@@ -56,7 +57,7 @@ def data_to_configuration(data, head_name: str = "Default") -> Optional[Configur
     natoms = int(len(atomic_numbers))
 
     # positions
-    positions = data.pos.cpu().numpy() if hasattr(data, "positions") else None
+    positions = data.pos.cpu().numpy()
 
     # properties mapping: use MACE property keys (energy, forces, stress, dipole, charges, polarizability)
     props = {}
@@ -152,29 +153,21 @@ def data_to_configuration(data, head_name: str = "Default") -> Optional[Configur
 def run_conversion(
     input_path: str,
     h5_prefix: str,
+    r_max = 5.0
 ):
     if not os.path.exists(input_path):
         # look in default cache location
         dataset_dir = os.path.expanduser(
             "~/.cache/kagglehub/datasets/yunhonghan/hessian-dataset-for-optimizing-reactive-mliphorm/versions/5/"
         )
-        if os.exists(os.path.join(dataset_dir, input_path)):
+        if os.path.exists(os.path.join(dataset_dir, input_path)):
             input_path = os.path.join(dataset_dir, input_path)
     
-    ds = HormLmdbDataset(input_path)
-    indices = list(range(len(ds)))
-
-    configs: List[Configuration] = []
-
-    for idx in indices:
-        data = ds[idx]
-        config = data_to_configuration(data)
-        configs.append(config)
-
     # Prepare output path: if h5_prefix ends with .h5 use it, else create directory
     if h5_prefix is None:
         out_dir = os.path.dirname(input_path)
-        base = os.path.basename(os.path.normpath(input_path)).strip(".lmdb")
+        base = os.path.basename(os.path.normpath(input_path))
+        base = base.replace(".lmdb", "")
         out_path = os.path.join(out_dir, f"{base}.h5")
     elif h5_prefix.endswith('.h5'):
         # is a filename
@@ -186,19 +179,31 @@ def run_conversion(
         os.makedirs(h5_prefix, exist_ok=True)
         base = os.path.basename(os.path.normpath(input_path)).strip(".lmdb")
         out_path = os.path.join(h5_prefix, f"{base}.h5")
+    
+    ds = HormLmdbDataset(input_path)
+    indices = list(range(len(ds)))
 
+    configs: List[Configuration] = []
+
+    for idx in tqdm(indices):
+        data = ds[idx]
+        config = data_to_configuration(data)
+        configs.append(config)
+
+    print(f"Writing {len(configs)} configurations to {out_path}")
     with h5py.File(out_path, "w") as f:
         save_configurations_as_HDF5(list(configs), 0, f)
 
-    print(f"Wrote {len(configs)} configurations to {out_path}")
+    print(f"Wrote {len(configs)} configurations")
+    
 
     # Compute dataset statistics (average neighbors, mean per-atom energies, RMS of forces)
     # Create a DataLoader over the newly written HDF5 file to compute graph-based stats
     # Construct z_table from GLOBAL_ATOM_NUMBERS and set a default cutoff r_max
+    print("\nComputing dataset statistics")
     z_list = GLOBAL_ATOM_NUMBERS.tolist()
     z_table = AtomicNumberTable(z_list)
-    r_max_default = 5.0
-    h5_dataset = HDF5Dataset(out_path, r_max=r_max_default, z_table=z_table)
+    h5_dataset = HDF5Dataset(out_path, r_max=r_max, z_table=z_table)
     train_loader = torch_geometric.dataloader.DataLoader(
         dataset=h5_dataset,
         batch_size=16,

@@ -14,7 +14,7 @@ try:
     from mace.modules.ocp_graph_utils import generate_graph
 except ImportError as e:
     generate_graph = None
-    print(f"Error importing ocp_graph_utils: {e}. Using slower loop without torch_geometric.")
+    print(f"Warning: importing ocp_graph_utils failed: {e}. Using slower loop without torch_geometric and torch_cluster to build the Hessian graph.")
 
 def irreps_to_cartesian_matrix(irreps: torch.Tensor) -> torch.Tensor:
     """

@@ -21,7 +21,6 @@ Test HIP-MACE
 uv run tests/test_hip.py
 uv run tests/test_equivariance.py
 ```
-```
 
 Train HIP-MACE to overfit a small subset of 100 datapoints
 ```bash
@@ -37,6 +36,7 @@ uv run scripts/run_train.py --config=configs/horm100.yaml --hidden_irreps="128x0
 Download the data from https://huggingface.co/andreasburger/hip
 ```bash
 TBD
+```
 
 Train a full HIP-MACE run
 ```bash
@@ -62,7 +62,7 @@ uv run scripts/download_horm_data_kaggle.py
 uv run scripts/convert_lmdb_to_h5.py --in_file "data/sample_100.lmdb" 
 uv run scripts/convert_lmdb_to_h5.py --in_file "ts1x-val.lmdb" 
 uv run scripts/convert_lmdb_to_h5.py --in_file "ts1x_hess_train_big.lmdb" 
-uv run scripts/convert_lmdb_to_h5.py --in_file "RGD1.lmdb" 
+# uv run scripts/convert_lmdb_to_h5.py --in_file "RGD1.lmdb" 
 ```
 
 ---

@@ -557,9 +557,6 @@ class MACE(torch.nn.Module):
             edge_distance_vec_hessian.to(node_feats_list[0].dtype)
         )
         
-        print("edge_index_hessian[0]", edge_index_hessian[0].shape, edge_index_hessian[0].max().item(), edge_index_hessian[0].min().item(), flush=True)
-        print("edge_index_hessian[1]", edge_index_hessian[1].shape, edge_index_hessian[1].max().item(), edge_index_hessian[1].min().item(), flush=True)
-        
         # Make l=0,1,2 node and edge features for the Hessian
         diag_feats_list = []
         off_diag_feats_list = []
