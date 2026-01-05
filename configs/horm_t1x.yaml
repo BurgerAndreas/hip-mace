@@ -1,5 +1,5 @@
 # ====== Name and seed ======
-name: horm100
+name: horm_t1x
 seed: 42
 
 # ====== Directories ======
@@ -65,8 +65,8 @@ hessian_edge_lmax: 3
 
 
 # ====== Dataset ======
-train_file: ./data/sample_100.h5
-valid_file: ./data/sample_100.h5
+train_file: ~/.cache/kagglehub/datasets/yunhonghan/hessian-dataset-for-optimizing-reactive-mliphorm/versions/5/ts1x_hess_train_big.h5
+valid_file: ~/.cache/kagglehub/datasets/yunhonghan/hessian-dataset-for-optimizing-reactive-mliphorm/versions/5/ts1x-val.h5
 valid_fraction: 0.1
 test_file: null
 test_dir: null
@@ -129,10 +129,10 @@ swa_polarizability_weight: 1.0
 polarizability_weight: 1.0
 config_type_weights: '{"Default":1.0}'
 huber_delta: 0.01
-optimizer: adam
+optimizer: adamw
 beta: 0.9
-batch_size: 16
-valid_batch_size: 16
+batch_size: 32
+valid_batch_size: 32
 lr: 0.01
 swa_lr: 0.001
 weight_decay: 0.0000005

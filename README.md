@@ -21,10 +21,6 @@ Test HIP-MACE
 uv run tests/test_hip.py
 uv run tests/test_equivariance.py
 ```
-
-Download the data from https://huggingface.co/andreasburger/hip
-```bash
-TBD
 ```
 
 Train HIP-MACE to overfit a small subset of 100 datapoints
@@ -37,6 +33,10 @@ uv run scripts/run_train.py --config=configs/horm100.yaml --hidden_irreps="128x0
 uv run scripts/run_train.py --config=configs/horm100.yaml
 uv run scripts/run_train.py --config=configs/horm100.yaml --hidden_irreps="128x0e + 128x1o + 128x2e"
 ```
+
+Download the data from https://huggingface.co/andreasburger/hip
+```bash
+TBD
 
 Train a full HIP-MACE run
 ```bash
