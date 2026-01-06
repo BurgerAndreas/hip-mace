@@ -17,7 +17,7 @@ distributed: false
 launcher: slurm
 log_level: INFO
 plot: true
-error_table: PerAtomRMSE # TotalMAEHessian
+error_table: TotalMAE # TotalMAEHessian
 
 # ====== Model ======
 model: MACE

@@ -1,5 +1,5 @@
 # ====== Name and seed ======
-name: horm_t1x
+name: horm100
 seed: 42
 
 # ====== Directories ======
@@ -17,44 +17,23 @@ distributed: false
 launcher: slurm
 log_level: INFO
 plot: true
-plot_frequency: 0
-plot_interaction_e: false
-error_table: PerAtomRMSE # TotalMAEHessian
+error_table: TotalMAE # TotalMAEHessian
 
 # ====== Model ======
 model: MACE
 r_max: 5.0
-radial_type: bessel
-num_radial_basis: 8
-num_cutoff_basis: 5
-pair_repulsion: false
-distance_transform: None
-apply_cutoff: true
-use_last_readout_only: false
-use_embedding_readout: false
-interaction: RealAgnosticResidualInteractionBlock
-interaction_first: RealAgnosticResidualInteractionBlock
 max_ell: 3
 correlation: 3
-use_reduced_cg: false
-use_so3: false
-use_agnostic_product: false
 num_interactions: 2
 MLP_irreps: "16x0e"
 radial_MLP: "[64, 64, 64]"
 hidden_irreps: "128x0e + 128x1o"
 edge_irreps: null
-num_channels: null
 max_L: null
-gate: silu
-scaling: rms_forces_scaling
 avg_num_neighbors: 12.876944541931152
 compute_avg_num_neighbors: false
-compute_stress: false
 compute_forces: true
 predict_hessian: false # for HIP
-compute_polarizability: false
-compute_atomic_dipole: false
 
 # ====== HIP / Hessian prediction ======
 hip: false
@@ -70,7 +49,6 @@ valid_file: ~/.cache/kagglehub/datasets/yunhonghan/hessian-dataset-for-optimizin
 valid_fraction: 0.1
 test_file: null
 test_dir: null
-multi_processed_test: false
 num_workers: 0
 pin_memory: true
 atomic_numbers: "[1, 6, 7, 8]"
@@ -80,61 +58,21 @@ statistics_file: null
 les_arguments: null
 E0s: "{1: 0.0, 6: 0.0, 7: 0.0, 8: 0.0}"
 
-# ====== Fine-tuning ======
-pseudolabel_replay: false
-foundation_filter_elements: true
-heads: null
-multiheads_finetuning: true
-foundation_head: null
-weight_pt_head: 1.0
-real_pt_data_ratio_threshold: 0.1
-num_samples_pt: 10000
-force_mh_ft_lr: false
-subselect_pt: random
-filter_type_pt: none
-pt_train_file: null
-pt_valid_file: null
-foundation_model_elements: false
-keep_isolated_atoms: false
-
 # ====== Keys ======
 energy_key: energy
 forces_key: forces
 hessian_key: hessian # for HIP
-virials_key: virials
-stress_key: stress
-dipole_key: dipole
-polarizability_key: polarizability
-head_key: head
-charges_key: charges
-elec_temp_key: elec_temp
-total_spin_key: total_spin
-total_charge_key: total_charge
-embedding_specs: null
-skip_evaluate_heads: pt_head
 
 # ====== Loss and optimization ======
 loss: weighted # MSE for both energy and forces
 forces_weight: 100.0
-swa_forces_weight: 100.0
 energy_weight: 1.0
-swa_energy_weight: 1000.0
 virials_weight: 1.0
-swa_virials_weight: 10.0
-stress_weight: 1.0
-swa_stress_weight: 10.0
-dipole_weight: 1.0
-swa_dipole_weight: 1.0
-swa_polarizability_weight: 1.0
-polarizability_weight: 1.0
-config_type_weights: '{"Default":1.0}'
-huber_delta: 0.01
 optimizer: adamw
 beta: 0.9
-batch_size: 32
-valid_batch_size: 32
+batch_size: 16
+valid_batch_size: 16
 lr: 0.01
-swa_lr: 0.001
 weight_decay: 0.0000005
 amsgrad: true
 scheduler: ReduceLROnPlateau
@@ -142,21 +80,11 @@ lr_factor: 0.8
 scheduler_patience: 50
 lr_scheduler_gamma: 0.9993
 swa: false
-start_swa: null
-lbfgs: false
 ema: false
 ema_decay: 0.99
-max_num_epochs: 100
+max_num_epochs: 10000
 patience: 2048
-foundation_model: null
-foundation_model_readout: true
 eval_interval: 1
-keep_checkpoints: false
-save_all_checkpoints: false
-restart_latest: false
-save_cpu: false
-clip_grad: 10.0
-dry_run: false
 
 # ====== Acceleration options ======
 enable_cueq: false
@@ -170,3 +98,4 @@ wandb_project: hip-mace
 wandb_entity: ""
 wandb_name: ""
 wandb_log_hypers: null
+

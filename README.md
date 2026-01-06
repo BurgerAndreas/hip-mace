@@ -25,36 +25,15 @@ uv run tests/test_equivariance.py
 Train HIP-MACE to overfit a small subset of 100 datapoints
 ```bash
 # with HIP
-uv run scripts/run_train.py --config=configs/horm100.yaml --hidden_irreps="128x0e + 128x1o + 128x2e" --hip=true --loss="l1l2l1energyforceshessian" --predict_hessian=true --error_table="TotalMAEHessian"
+uv run scripts/run_train.py --config=configs/horm_100.yaml --hidden_irreps="128x0e + 128x1o + 128x2e" --hip=true --loss="l1l2l1energyforceshessian" --predict_hessian=true --error_table="TotalMAEHessian"
 # --batch_size=4 --valid_batch_size=4
-# --lr=0.001 ---optimizer=adamw --max_num_epochs=1000
 
 # without HIP (energy and forces)
-uv run scripts/run_train.py --config=configs/horm100.yaml
-uv run scripts/run_train.py --config=configs/horm100.yaml --hidden_irreps="128x0e + 128x1o + 128x2e"
+uv run scripts/run_train.py --config=configs/horm_100.yaml
+uv run scripts/run_train.py --config=configs/horm_100.yaml --hidden_irreps="128x0e + 128x1o + 128x2e"
 ```
 
-Download the data from https://huggingface.co/andreasburger/hip
-```bash
-TBD
-```
-
-Train a full HIP-MACE run
-```bash
-TBD
-```
-
-Train a regular MACE model just energy and forces
-```bash
-TBD
-```
-
-Compare HIP-MACE to autograd Hessians from regular MACE
-```bash
-TBD
-```
-
-Note: how we processed the data
+Get and processed the data
 ```bash
 # download the HORM dataset
 export KAGGLEHUB_CACHE=/path/to/your/preferred/directory
@@ -65,6 +44,24 @@ uv run scripts/convert_lmdb_to_h5.py --in_file "ts1x-val.lmdb"
 uv run scripts/convert_lmdb_to_h5.py --in_file "ts1x_hess_train_big.lmdb" 
 # uv run scripts/convert_lmdb_to_h5.py --in_file "RGD1.lmdb" 
 ```
+
+Train HIP-MACE on the full dataset
+```bash
+uv run scripts/run_train.py --config=configs/horm_t1x_.yaml --hidden_irreps="128x0e + 128x1o + 128x2e" --hip=true --loss="l1l2l1energyforceshessian" --predict_hessian=true --error_table="TotalMAEHessian"
+```
+
+Train regular MACE model on just energy and forces
+```bash
+uv run scripts/run_train.py --config=configs/horm_t1x_.yaml
+uv run scripts/run_train.py --config=configs/horm_t1x_.yaml --hidden_irreps="128x0e + 128x1o + 128x2e"
+```
+
+Compare HIP-MACE to autograd Hessians from regular MACE
+```bash
+uv run scripts/eval_horm.py
+```
+
+
 
 ---
 ---

@@ -852,12 +852,13 @@ def setup_wandb(args: argparse.Namespace):
     else:
         for key in args.wandb_log_hypers:
             wandb_config[key] = args_dict[key]
-    tools.init_wandb(
+    wandb.init(
         project=args.wandb_project,
         entity=args.wandb_entity,
         name=args.wandb_name,
         config=wandb_config,
-        directory=args.wandb_dir,
+        dir=args.wandb_dir,
+        resume="allow",
     )
     wandb.run.summary["params"] = args_dict_json
 

@@ -1,8 +1,18 @@
 import logging
 import os
 import time
-
+import yaml
+import numpy as np
 from e3nn import o3
+
+def args_to_dict(args):
+    args_dict = vars(args)
+
+    for key, value in args_dict.items():
+        if isinstance(value, np.ndarray):
+            args_dict[key] = value.tolist()
+
+    return args_dict
 
 
 def check_args(args):
@@ -25,6 +35,12 @@ def check_args(args):
         args.results_dir = os.path.join(args.work_dir, "results", run_id)
     if args.downloads_dir is None:
         args.downloads_dir = os.path.join(args.work_dir, "downloads")
+    
+    # save training config to a yaml file
+    args_dict = args_to_dict(args)
+    os.makedirs(args.checkpoints_dir, exist_ok=True)
+    with open(os.path.join(args.checkpoints_dir, "config.yaml"), "w") as f:
+        yaml.dump(args_dict, f)
 
     # Model
     # Check if hidden_irreps, num_channels and max_L are consistent

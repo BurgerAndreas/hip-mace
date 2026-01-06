@@ -129,19 +129,6 @@ def voigt_to_matrix(t: torch.Tensor):
     )
 
 
-def init_wandb(project: str, entity: str, name: str, config: dict, directory: str):
-    import wandb
-
-    wandb.init(
-        project=project,
-        entity=entity,
-        name=name,
-        config=config,
-        dir=directory,
-        resume="allow",
-    )
-
-
 @contextmanager
 def default_dtype(dtype: Union[torch.dtype, str]):
     """Context manager for configuring the default_dtype used by torch
