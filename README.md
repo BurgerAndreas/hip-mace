@@ -27,6 +27,7 @@ Train HIP-MACE to overfit a small subset of 100 datapoints
 # with HIP
 uv run scripts/run_train.py --config=configs/horm100.yaml --hidden_irreps="128x0e + 128x1o + 128x2e" --hip=true --loss="l1l2l1energyforceshessian" --predict_hessian=true --error_table="TotalMAEHessian"
 # --batch_size=4 --valid_batch_size=4
+# --lr=0.001 ---optimizer=adamw --max_num_epochs=1000
 
 # without HIP (energy and forces)
 uv run scripts/run_train.py --config=configs/horm100.yaml

@@ -991,19 +991,20 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         "--wandb_log_hypers",
         help="The hyperparameters to log in Weights and Biases",
         nargs="+",
-        default=[
-            "num_channels",
-            "max_L",
-            "correlation",
-            "lr",
-            "swa_lr",
-            "weight_decay",
-            "batch_size",
-            "max_num_epochs",
-            "start_swa",
-            "energy_weight",
-            "forces_weight",
-        ],
+        # default=[
+        #     "num_channels",
+        #     "max_L",
+        #     "correlation",
+        #     "lr",
+        #     "swa_lr",
+        #     "weight_decay",
+        #     "batch_size",
+        #     "max_num_epochs",
+        #     "start_swa",
+        #     "energy_weight",
+        #     "forces_weight",
+        # ],
+        default=None,
     )
     return parser
 
