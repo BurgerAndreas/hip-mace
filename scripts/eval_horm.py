@@ -1,16 +1,18 @@
 import torch
 import argparse
 import numpy as np
-import torch
-from tqdm import tqdm
 import wandb
 import pandas as pd
-import matplotlib.pyplot as plt
 import os
+from tqdm import tqdm
 from torch_geometric.loader import DataLoader as TGDataLoader
 
+from mace.data import AtomicData, AtomicDataset
+from mace.tools import to_numpy
 from mace.modules.frequency_analysis import analyze_frequencies_np
-
+from mace.tools import Z_TO_ATOM_SYMBOL
+from mace.tools.checkpoint import load_checkpoint
+from mace.calculators.mace import MACECalculator
 
 def evaluate(
     lmdb_path,
@@ -23,46 +25,8 @@ def evaluate(
     redo=False,
 ):
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    ckpt = torch.load(checkpoint_path, weights_only=False, map_location=device)
-    model_name = ckpt["hyper_parameters"]["model_config"]["name"]
-    model_config = ckpt["hyper_parameters"]["model_config"]
-    print(f"Model name: {model_name}")
 
-    _name = ""
-    # _name += checkpoint_path.split("/")[-2]
-    _name += checkpoint_path.split("/")[-1].split(".")[0]
-    # _name += "_" + lmdb_path.split("/")[-1].split(".")[0]
-    if hessian_method != "autograd":
-        _name += "_" + hessian_method
-    _name += "_" + str(max_samples)
-
-    if wandb_run_id is None:
-        wandb.init(
-            project="horm",
-            name=_name,
-            config={
-                "checkpoint": checkpoint_path,
-                "dataset": lmdb_path,
-                "max_samples": max_samples,
-                "model_name": model_name,
-                "config_path": config_path,
-                "hessian_method": hessian_method,
-                "model_config": model_config,
-            },
-            tags=["hormmetrics"],
-            **wandb_kwargs,
-        )
-
-    model = PotentialModule.load_from_checkpoint(
-        checkpoint_path,
-        strict=False,
-    ).potential.to(device)
-    model.eval()
-
-    do_autograd = hessian_method == "autograd"
-    print(f"do_autograd: {do_autograd}")
-
-    # Create results file path
+    # Set up save location
     dataset_name = lmdb_path.split("/")[-1].split(".")[0]
     results_dir = "results_evalhorm"
     os.makedirs(results_dir, exist_ok=True)
@@ -71,239 +35,183 @@ def evaluate(
         f"{results_dir}/{ckpt_name}_{dataset_name}_{hessian_method}_metrics.csv"
     )
 
-    time_taken_all = None
-    n_total_samples = None
-
-    # Check if results already exist and redo is False
     if os.path.exists(results_file) and not redo:
         print(f"Loading existing results from {results_file}")
         df_results = pd.read_csv(results_file)
+        aggregated_results = None # only calculate below if re-evaluated
+        return df_results, aggregated_results
 
-    else:
-        torch.manual_seed(42)
-        np.random.seed(42)
+    # Load model using correct MACE checkpoint API
+    print(f"Loading model from {checkpoint_path}")
+    checkpoint = load_checkpoint(checkpoint_path, map_location=device)
+    model = checkpoint["model"]
+    model = model.to(device)
+    model.eval()
 
-        dataset = LmdbDataset(fix_dataset_path(lmdb_path))
-        # dataset = LmdbDataset(fix_dataset_path(lmdb_path))
-        dataloader = TGDataLoader(dataset, batch_size=1, shuffle=True)
+    # Load dataset using MACE AtomicDataset
+    # Assumes dataset is a LMDB, see configs/horm_100.yaml
+    print(f"Loading data from {lmdb_path}")
+    dataset = AtomicDataset(lmdb_path)
+    dataloader = TGDataLoader(dataset, batch_size=1, shuffle=True)
 
-        # Initialize metrics collection for per-sample DataFrame
-        sample_metrics = []
-        n_samples = 0
+    sample_metrics = []
+    n_samples = 0
+    n_total_samples = min(len(dataset), max_samples) if max_samples is not None else len(dataset)
 
-        if max_samples is not None:
-            n_total_samples = min(max_samples, len(dataloader))
-        else:
-            n_total_samples = len(dataloader)
+    # Setup wandb if needed
+    if wandb_run_id is None:
+        wandb.init(
+            project="hip-mace",
+            name=f"{ckpt_name}_{hessian_method}_{max_samples if max_samples else 'all'}",
+            config={
+                "checkpoint": checkpoint_path,
+                "dataset": lmdb_path,
+                "max_samples": max_samples,
+                "model_name": "MACE",
+                "config_path": config_path,
+                "hessian_method": hessian_method,
+            },
+            tags=["hormmetrics"],
+            **wandb_kwargs,
+        )
 
-        # Warmup
-        for _i, batch in tqdm(enumerate(dataloader), desc="Warmup", total=10):
-            if _i >= 10:
-                break
-            batch = batch.to(device)
+    # Main evaluation loop
+    for batch in tqdm(dataloader, desc="Evaluating", total=n_total_samples):
+        batch = batch.to(device)
+        n_atoms = batch.pos.shape[0]
 
-            n_atoms = batch.pos.shape[0]
-
-            torch.cuda.reset_peak_memory_stats()
-            start_event = torch.cuda.Event(enable_timing=True)
-            end_event = torch.cuda.Event(enable_timing=True)
-            start_event.record()
-
-            # Forward pass
-            if model_name == "LEFTNet":
-                batch.pos.requires_grad_()
-                energy_model, force_model = model.forward_autograd(batch)
-                hessian_model = compute_hessian(batch.pos, energy_model, force_model)
-            elif "equiformer" in model_name.lower():
-                if do_autograd:
-                    batch.pos.requires_grad_()
-                    energy_model, force_model, out = model.forward(
-                        batch, otf_graph=False, hessian=False
-                    )
-                    hessian_model = compute_hessian(
-                        batch.pos, energy_model, force_model
-                    )
-                else:
-                    with torch.no_grad():
-                        energy_model, force_model, out = model.forward(
-                            batch,
-                            otf_graph=False,
-                        )
-                    hessian_model = out["hessian"].reshape(n_atoms * 3, n_atoms * 3)
-            else:
-                # AlphaNet
-                batch.pos.requires_grad_()
-                energy_model, force_model = model.forward(batch)
-                hessian_model = compute_hessian(batch.pos, energy_model, force_model)
-
-        start_event_all = torch.cuda.Event(enable_timing=True)
-        end_event_all = torch.cuda.Event(enable_timing=True)
-        start_event_all.record()
-
-        for batch in tqdm(dataloader, desc="Evaluating", total=n_total_samples):
-            batch = batch.to(device)
-
-            n_atoms = batch.pos.shape[0]
-
-            torch.cuda.reset_peak_memory_stats()
-            start_event = torch.cuda.Event(enable_timing=True)
-            end_event = torch.cuda.Event(enable_timing=True)
-            start_event.record()
-
-            # Forward pass
-            if model_name == "LEFTNet":
-                batch.pos.requires_grad_()
-                energy_model, force_model = model.forward_autograd(batch)
-                hessian_model = compute_hessian(batch.pos, energy_model, force_model)
-            elif "equiformer" in model_name.lower():
-                if do_autograd:
-                    batch.pos.requires_grad_()
-                    energy_model, force_model, out = model.forward(
-                        batch, otf_graph=False, hessian=False
-                    )
-                    hessian_model = compute_hessian(
-                        batch.pos, energy_model, force_model
-                    )
-                else:
-                    with torch.no_grad():
-                        energy_model, force_model, out = model.forward(
-                            batch,
-                            otf_graph=False,
-                        )
-                    hessian_model = out["hessian"]
-            else:
-                # AlphaNet
-                batch.pos.requires_grad_()
-                energy_model, force_model = model.forward(batch)
-                hessian_model = compute_hessian(batch.pos, energy_model, force_model)
-
-            end_event.record()
-            torch.cuda.synchronize()
-
-            time_taken = start_event.elapsed_time(end_event)  # ms
-            memory_usage = torch.cuda.max_memory_allocated() / 1e6  # Convert to MB
-
-            hessian_model = hessian_model.reshape(n_atoms * 3, n_atoms * 3)
-
-            # Compute hessian eigenspectra
-            eigvals_model, eigvecs_model = torch.linalg.eigh(hessian_model)
-
-            # Compute errors
-            e_error = torch.mean(torch.abs(energy_model.squeeze() - batch.ae))
-            f_error = torch.mean(torch.abs(force_model - batch.forces))
-
-            # Reshape true hessian
-            n_atoms = batch.pos.shape[0]
-            hessian_true = batch.hessian.reshape(n_atoms * 3, n_atoms * 3)
-            h_error = torch.mean(torch.abs(hessian_model - hessian_true))
-
-            # Eigenvalue error
-            eigvals_true, eigvecs_true = torch.linalg.eigh(hessian_true)
-
-            # Asymmetry error
-            asymmetry_error = torch.mean(torch.abs(hessian_model - hessian_model.T))
-            true_asymmetry_error = torch.mean(torch.abs(hessian_true - hessian_true.T))
-
-            # Additional metrics
-            eigval_mae = torch.mean(
-                torch.abs(eigvals_model - eigvals_true)
-            )  # eV/Angstrom^2
-            eigval1_mae = torch.mean(torch.abs(eigvals_model[0] - eigvals_true[0]))
-            eigval2_mae = torch.mean(torch.abs(eigvals_model[1] - eigvals_true[1]))
-            eigvec1_cos = torch.abs(torch.dot(eigvecs_model[:, 0], eigvecs_true[:, 0]))
-            eigvec2_cos = torch.abs(torch.dot(eigvecs_model[:, 1], eigvecs_true[:, 1]))
-
-            # Collect per-sample metrics
-            sample_data = {
-                "sample_idx": n_samples,
-                "natoms": n_atoms,
-                "energy_error": e_error.item(),
-                "forces_error": f_error.item(),
-                "hessian_error": h_error.item(),
-                "asymmetry_error": asymmetry_error.item(),
-                "true_asymmetry_error": true_asymmetry_error.item(),
-                "eigval_mae": eigval_mae.item(),
-                "eigval1_mae": eigval1_mae.item(),
-                "eigval2_mae": eigval2_mae.item(),
-                "eigvec1_cos": eigvec1_cos.item(),
-                "eigvec2_cos": eigvec2_cos.item(),
-                "time": time_taken,  # ms
-                "memory": memory_usage,
-            }
-
-            ########################
-            # Mass weighted + Eckart projection
-            ########################
-
-            true_freqs = analyze_frequencies_np(
-                hessian=hessian_true.detach().cpu().numpy(),
-                cart_coords=batch.pos.detach().cpu().numpy(),
-                atomsymbols=[Z_TO_ATOM_SYMBOL[z.item()] for z in batch.z],
-            )
-            true_neg_num = true_freqs["neg_num"]
-            true_eigvecs_eckart = torch.tensor(true_freqs["eigvecs"])
-            true_eigvals_eckart = torch.tensor(true_freqs["eigvals"])
-
-            freqs_model = analyze_frequencies_np(
-                hessian=hessian_model.detach().cpu().numpy(),
-                cart_coords=batch.pos.detach().cpu().numpy(),
-                atomsymbols=[Z_TO_ATOM_SYMBOL[z.item()] for z in batch.z],
-            )
-            freqs_model_neg_num = freqs_model["neg_num"]
-            eigvecs_model_eckart = torch.tensor(freqs_model["eigvecs"])
-            eigvals_model_eckart = torch.tensor(freqs_model["eigvals"])
-
-            sample_data["true_neg_num"] = true_neg_num
-            sample_data["true_is_minima"] = 1 if true_neg_num == 0 else 0
-            sample_data["true_is_ts"] = 1 if true_neg_num == 1 else 0
-            sample_data["true_is_ts_order2"] = 1 if true_neg_num == 2 else 0
-            sample_data["true_is_higher_order"] = 1 if true_neg_num > 2 else 0
-            sample_data["model_neg_num"] = freqs_model_neg_num
-            sample_data["model_is_ts"] = 1 if freqs_model_neg_num == 1 else 0
-            sample_data["model_is_minima"] = 1 if freqs_model_neg_num == 0 else 0
-            sample_data["model_is_ts_order2"] = 1 if freqs_model_neg_num == 2 else 0
-            sample_data["model_is_higher_order"] = 1 if freqs_model_neg_num > 2 else 0
-            sample_data["neg_num_agree"] = (
-                1 if (true_neg_num == freqs_model_neg_num) else 0
-            )
-
-            sample_data["eigval_mae_eckart"] = torch.mean(
-                torch.abs(eigvals_model_eckart - true_eigvals_eckart)
-            )
-            sample_data["eigval1_mae_eckart"] = torch.mean(
-                torch.abs(eigvals_model_eckart[0] - true_eigvals_eckart[0])
-            )
-            sample_data["eigval2_mae_eckart"] = torch.mean(
-                torch.abs(eigvals_model_eckart[1] - true_eigvals_eckart[1])
-            )
-            sample_data["eigvec1_cos_eckart"] = torch.abs(
-                torch.dot(eigvecs_model_eckart[:, 0], true_eigvecs_eckart[:, 0])
-            )
-            sample_data["eigvec2_cos_eckart"] = torch.abs(
-                torch.dot(eigvecs_model_eckart[:, 1], true_eigvecs_eckart[:, 1])
-            )
-
-            sample_metrics.append(sample_data)
-            n_samples += 1
-
-            # Memory management
-            torch.cuda.empty_cache()
-
-            if max_samples is not None and n_samples >= max_samples:
-                break
-
-        end_event_all.record()
+        # TIMING for hessian only (not I/O)
         torch.cuda.synchronize()
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
+        start_event.record()
 
-        time_taken_all = start_event_all.elapsed_time(end_event_all)  # ms
+        # Forward pass: select autograd (default) or MACE HIP (predict) Hessian
+        # Reference: test_hessian.py and test_hip.py
+        batch.requires_grad = True
+        with torch.no_grad() if hessian_method == "predict" else torch.enable_grad():
+            if hessian_method == "autograd":
+                # Use automatic differentiation (see tests/test_hessian.py)
+                mace_out = model(batch, compute_hessian=True)
+                hessian_model = mace_out["hessian"] # shape (n_atoms*3, n_atoms*3)
+                energy_model = mace_out["energy"]
+                force_model = mace_out["forces"]
+            elif hessian_method == "predict":
+                # Use HIP predicted hessian (see tests/test_hip.py)
+                mace_out = model(batch, predict_hessian=True)
+                hessian_model = mace_out["hessian"]
+                energy_model = mace_out["energy"]
+                force_model = mace_out["forces"]
+            else:
+                raise ValueError("Choose hessian_method from ['autograd', 'predict'].")
 
-        # Create DataFrame from collected metrics
-        df_results = pd.DataFrame(sample_metrics)
+        end_event.record()
+        torch.cuda.synchronize()
+        time_taken = start_event.elapsed_time(end_event) 
+        memory_usage = torch.cuda.max_memory_allocated() / 1e6 # MB
 
-        # Save DataFrame
-        df_results.to_csv(results_file, index=False)
-        print(f"Saved results to {results_file}")
+        hessian_model = hessian_model.reshape(n_atoms * 3, n_atoms * 3)
 
+        # True data
+        ae_true = batch.y
+        force_true = batch.forces
+        hessian_true = batch.hessian.reshape(n_atoms * 3, n_atoms * 3)
+
+        # Eigendecomposition
+        eigvals_model, eigvecs_model = torch.linalg.eigh(hessian_model)
+        eigvals_true, eigvecs_true = torch.linalg.eigh(hessian_true)
+
+        # Compute errors
+        e_error = torch.mean(torch.abs(energy_model.squeeze() - ae_true))
+        f_error = torch.mean(torch.abs(force_model - force_true))
+        h_error = torch.mean(torch.abs(hessian_model - hessian_true))
+        asymmetry_error = torch.mean(torch.abs(hessian_model - hessian_model.T))
+        true_asymmetry_error = torch.mean(torch.abs(hessian_true - hessian_true.T))
+
+        # Additional (as in original)
+        eigval_mae = torch.mean(torch.abs(eigvals_model - eigvals_true))
+        eigval1_mae = torch.abs(eigvals_model[0] - eigvals_true[0])
+        eigval2_mae = torch.abs(eigvals_model[1] - eigvals_true[1])
+        eigvec1_cos = torch.abs(torch.dot(eigvecs_model[:, 0], eigvecs_true[:, 0]))
+        eigvec2_cos = torch.abs(torch.dot(eigvecs_model[:, 1], eigvecs_true[:, 1]))
+
+        # Analyze frequency & Eckart (mass weighting)
+        symbols = [Z_TO_ATOM_SYMBOL[z.item()] for z in batch.z]
+        true_freqs = analyze_frequencies_np(
+            hessian=hessian_true.detach().cpu().numpy(),
+            cart_coords=batch.pos.detach().cpu().numpy(),
+            atomsymbols=symbols,
+        )
+        true_neg_num = true_freqs["neg_num"]
+        true_eigvecs_eckart = torch.tensor(true_freqs["eigvecs"])
+        true_eigvals_eckart = torch.tensor(true_freqs["eigvals"])
+
+        freqs_model = analyze_frequencies_np(
+            hessian=hessian_model.detach().cpu().numpy(),
+            cart_coords=batch.pos.detach().cpu().numpy(),
+            atomsymbols=symbols,
+        )
+        freqs_model_neg_num = freqs_model["neg_num"]
+        eigvecs_model_eckart = torch.tensor(freqs_model["eigvecs"])
+        eigvals_model_eckart = torch.tensor(freqs_model["eigvals"])
+
+        # Collect metrics
+        sample_data = {
+            "sample_idx": n_samples,
+            "natoms": n_atoms,
+            "energy_error": e_error.item(),
+            "forces_error": f_error.item(),
+            "hessian_error": h_error.item(),
+            "asymmetry_error": asymmetry_error.item(),
+            "true_asymmetry_error": true_asymmetry_error.item(),
+            "eigval_mae": eigval_mae.item(),
+            "eigval1_mae": eigval1_mae.item(),
+            "eigval2_mae": eigval2_mae.item(),
+            "eigvec1_cos": eigvec1_cos.item(),
+            "eigvec2_cos": eigvec2_cos.item(),
+            "time": float(time_taken),
+            "memory": float(memory_usage),
+            "true_neg_num": true_neg_num,
+            "true_is_minima": int(true_neg_num == 0),
+            "true_is_ts": int(true_neg_num == 1),
+            "true_is_ts_order2": int(true_neg_num == 2),
+            "true_is_higher_order": int(true_neg_num > 2),
+            "model_neg_num": freqs_model_neg_num,
+            "model_is_ts": int(freqs_model_neg_num == 1),
+            "model_is_minima": int(freqs_model_neg_num == 0),
+            "model_is_ts_order2": int(freqs_model_neg_num == 2),
+            "model_is_higher_order": int(freqs_model_neg_num > 2),
+            "neg_num_agree": int(true_neg_num == freqs_model_neg_num),
+            "eigval_mae_eckart": torch.mean(
+                torch.abs(eigvals_model_eckart - true_eigvals_eckart)
+            ).item(),
+            "eigval1_mae_eckart": torch.abs(
+                eigvals_model_eckart[0] - true_eigvals_eckart[0]
+            ).item(),
+            "eigval2_mae_eckart": torch.abs(
+                eigvals_model_eckart[1] - true_eigvals_eckart[1]
+            ).item(),
+            "eigvec1_cos_eckart": torch.abs(
+                torch.dot(eigvecs_model_eckart[:, 0], true_eigvecs_eckart[:, 0])
+            ).item(),
+            "eigvec2_cos_eckart": torch.abs(
+                torch.dot(eigvecs_model_eckart[:, 1], true_eigvecs_eckart[:, 1])
+            ).item(),
+        }
+
+        sample_metrics.append(sample_data)
+        n_samples += 1
+        torch.cuda.empty_cache()
+
+        if max_samples is not None and n_samples >= max_samples:
+            break
+
+    # Save per-sample results
+    df_results = pd.DataFrame(sample_metrics)
+    df_results.to_csv(results_file, index=False)
+    print(f"Saved results to {results_file}")
+
+    # Aggregate
     aggregated_results = {
         "energy_mae": df_results["energy_error"].mean(),
         "forces_mae": df_results["forces_error"].mean(),
@@ -338,120 +246,43 @@ def evaluate(
         "time": df_results["time"].mean(),  # ms
         "memory": df_results["memory"].mean(),
     }
-    if time_taken_all is not None:
-        # ms per forward pass
-        aggregated_results["time_incltransform"] = time_taken_all / n_total_samples
 
     wandb.log(aggregated_results)
-
     if wandb_run_id is None:
         wandb.finish()
 
     return df_results, aggregated_results
 
 
-def plot_accuracy_vs_natoms(df_results, name):
-    """Plot accuracy metrics over number of atoms"""
-
-    # Create figure with subplots
-    fig, axes = plt.subplots(nrows=5, ncols=2, figsize=(12, 10))
-    fig.suptitle("Model Accuracy vs Number of Atoms", fontsize=16)
-
-    # Define metrics to plot and their labels
-    metrics = [
-        ("energy_error", "Energy MAE", "Energy Error"),
-        ("forces_error", "Forces MAE", "Forces Error"),
-        ("hessian_error", "Hessian MAE", "Hessian Error"),
-        ("eigvec1_cos", "Eigenvector 1 Cosine", "Eigenvector 1 Cosine"),
-        ("eigval1_mae", "Eigenvalue 1 MAE", "Eigenvalue 1 MAE"),
-        ("is_ts_agree", "Is TS Agree", "Is TS Agree"),
-        ("neg_num_agree", "Neg Num Agree", "Neg Num Agree"),
-        ("true_is_ts", "True Is TS", "True Is TS"),
-        ("model_is_ts", "Model Is TS", "Model Is TS"),
-    ]
-
-    # Plot each metric
-    for i, (metric, title, ylabel) in enumerate(metrics):
-        ax = axes[i // 2, i % 2]
-
-        # Skip metrics not available in results
-        if metric not in df_results.columns:
-            ax.set_visible(False)
-            continue
-
-        # Group by natoms and calculate mean and std
-        grouped = (
-            df_results.groupby("natoms")[metric].agg(["mean", "std"]).reset_index()
-        )
-
-        # Plot mean with error bars
-        ax.errorbar(
-            grouped["natoms"],
-            grouped["mean"],
-            yerr=grouped["std"],
-            marker="o",
-            capsize=5,
-            capthick=2,
-            linewidth=2,
-        )
-
-        ax.set_xlabel("Number of Atoms")
-        ax.set_ylabel(ylabel)
-        ax.set_title(title)
-        ax.grid(True, alpha=0.3)
-
-        # Set log scale for y-axis if needed (based on data range)
-        if grouped["mean"].max() / (grouped["mean"].min() + 1e-8) > 100:
-            ax.set_yscale("log")
-
-    plt.tight_layout()
-
-    # Save plot
-    plot_dir = "plots/eval_horm"
-    os.makedirs(plot_dir, exist_ok=True)
-    plot_filename = f"{plot_dir}/accuracy_vs_natoms_{name}.png"
-    plt.savefig(plot_filename, dpi=300, bbox_inches="tight")
-    print(f"Saved plot to {plot_filename}")
-
-    # Show plot
-    plt.show()
-
-
-"""
-uv run python scripts/eval_horm.py -c ckpt/eqv2.ckpt -d ts1x-val.lmdb -m 1000 -r True
-uv run python scripts/eval_horm.py -c ckpt/hesspred_v1.ckpt -d ts1x-val.lmdb -m 1000 -r True -hm predict
-uv run python scripts/eval_horm.py -c ckpt/hip_v2.ckpt -d ts1x-val.lmdb -m 1000 -r True -hm predict
-uv run python scripts/eval_horm.py -c ckpt/hip_v3.ckpt -d ts1x-val.lmdb -m 1000 -r True -hm predict
-"""
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Evaluate HORM model on dataset")
+    parser = argparse.ArgumentParser(description="Evaluate MACE model on dataset (autograd vs HIP hessian)")
     parser.add_argument(
         "--ckpt_path",
         "-c",
         type=str,
-        default="ckpt/eqv2.ckpt",
-        help="Path to checkpoint file",
+        required=True,
+        help="Path to checkpoint file (MACE .pt)",
     )
     parser.add_argument(
         "--config_path",
         type=str,
         default=None,
-        help="Path to config file. Ignored at the moment (config from ckpt is used instead).",
+        help="Path to config file. (not used)",
     )
     parser.add_argument(
         "--hessian_method",
         "-hm",
         choices=["autograd", "predict"],
         type=str,
-        default="autograd",
-        help="Hessian computation method: autograd, predict",
+        required=True,
+        help="Hessian computation method: autograd (autodiff), predict (HIP/predicted)",
     )
     parser.add_argument(
         "--dataset",
         "-d",
         type=str,
-        default="ts1x-val.lmdb",
-        help="Dataset file name (e.g., ts1x-val.lmdb, ts1x_hess_train_big.lmdb, RGD1.lmdb)",
+        required=True,
+        help="Dataset file name or path (e.g. RGD1_100.lmdb, see configs/horm_100.yaml)",
     )
     parser.add_argument(
         "--max_samples",
@@ -479,8 +310,6 @@ if __name__ == "__main__":
     hessian_method = args.hessian_method
     redo = args.redo
 
-    name = f"{checkpoint_path.split('/')[-1].split('.')[0]}_{lmdb_path.split('/')[-1].split('.')[0]}_{hessian_method}"
-
     df_results, aggregated_results = evaluate(
         lmdb_path=lmdb_path,
         checkpoint_path=checkpoint_path,
@@ -490,5 +319,3 @@ if __name__ == "__main__":
         redo=redo,
     )
 
-    # Plot accuracy over Natoms
-    # plot_accuracy_vs_natoms(df_results, name)

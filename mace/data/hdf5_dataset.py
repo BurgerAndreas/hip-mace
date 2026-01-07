@@ -1,4 +1,5 @@
 from glob import glob
+import os
 from typing import List
 
 import h5py
@@ -14,7 +15,8 @@ class HDF5Dataset(Dataset):
         self, file_path, r_max, z_table, atomic_dataclass=AtomicData, **kwargs
     ):
         super(HDF5Dataset, self).__init__()  # pylint: disable=super-with-arguments
-        self.file_path = file_path
+        self.file_path = os.path.abspath(file_path)
+        print("HDF5Dataset file_path: ", self.file_path)
         self._file = None
         batch_key = list(self.file.keys())[0]
         self.batch_size = len(self.file[batch_key].keys())
@@ -85,6 +87,7 @@ def dataset_from_sharded_hdf5(
     files: List, z_table: AtomicNumberTable, r_max: float, **kwargs
 ):
     files = glob(files + "/*")
+    print("dataset_from_sharded_hdf5 found files: ", files)
     datasets = []
     for file in files:
         datasets.append(HDF5Dataset(file, z_table=z_table, r_max=r_max, **kwargs))

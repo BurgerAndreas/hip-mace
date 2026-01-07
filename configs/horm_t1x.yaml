@@ -68,7 +68,7 @@ loss: weighted # MSE for both energy and forces
 forces_weight: 100.0
 energy_weight: 1.0
 virials_weight: 1.0
-optimizer: adamw
+optimizer: adam
 beta: 0.9
 batch_size: 16
 valid_batch_size: 16

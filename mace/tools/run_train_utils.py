@@ -1,5 +1,6 @@
 import logging
 import os
+import traceback
 from pathlib import Path
 from typing import Any, List, Optional, Union
 
@@ -101,6 +102,7 @@ def load_dataset_for_path(
                     head=head_config.head_name,
                 )
             except Exception as e:
+                traceback.print_exc()
                 logging.error(f"Error loading sharded HDF5 dataset: {e}")
                 raise
 
@@ -129,6 +131,10 @@ def load_dataset_for_path(
 
     suffix = filepath.suffix.lower()
     if suffix in (".h5", ".hdf5"):
+        file_path = str(file_path)
+        if file_path.startswith("~"):
+            file_path = os.path.expanduser(file_path)
+            filepath = filepath.__class__(file_path)  # Preserve Path/str type
         logging.info(f"Loading single HDF5 file: {file_path}")
         return data.HDF5Dataset(
             file_path,
