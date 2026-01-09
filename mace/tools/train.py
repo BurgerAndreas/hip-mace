@@ -11,6 +11,8 @@ from collections import defaultdict
 from contextlib import nullcontext
 from typing import Any, Dict, List, Optional, Tuple, Union
 import warnings
+import os
+import wandb
 
 import numpy as np
 import torch
@@ -194,10 +196,24 @@ def train(
     swa_start = True
     keep_last = False
     if log_wandb:
-        import wandb
+        data_log = {
+            "data/train_samples": len(train_loader.dataset),
+        }
+        for valid_loader_name, valid_loader in valid_loaders.items():
+            data_log[f"data/valid_samples/{valid_loader_name}"] = len(
+                valid_loader.dataset
+            )
+        wandb.log(data_log, step=0)
 
     if max_grad_norm is not None:
         logging.info(f"Using gradient clipping with tolerance={max_grad_norm:.3f}")
+    
+    # Add SLURM job ID to config if it exists in environment
+    if "SLURM_JOB_ID" in os.environ:
+        slurm_job_id = os.environ["SLURM_JOB_ID"]
+        print(f"SLURM job ID: {slurm_job_id}")
+        if log_wandb:
+            wandb.log({"slurm_job_id": slurm_job_id}, step=0)
 
     logging.info("")
     logging.info("===========TRAINING===========")

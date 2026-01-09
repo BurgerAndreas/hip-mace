@@ -615,10 +615,17 @@ def run(args) -> None:
             raise ValueError(f"No valid datasets found for head {head_config.head_name}, please provide a valid_file or a valid_fraction")
 
         # Create data loader for this head
-        if isinstance(train_sets[head_config.head_name], list):
-            dataset_size = len(train_sets[head_config.head_name])
-        else:
-            dataset_size = len(train_sets[head_config.head_name])
+        train_dataset_head = train_sets[head_config.head_name]
+        if args.max_train_samples is not None:
+            max_train = min(args.max_train_samples, len(train_dataset_head))
+            if isinstance(train_dataset_head, list):
+                train_dataset_head = train_dataset_head[:max_train]
+            else:
+                train_dataset_head = torch.utils.data.Subset(
+                    train_dataset_head, range(max_train)
+                )
+            train_sets[head_config.head_name] = train_dataset_head
+        dataset_size = len(train_sets[head_config.head_name])
         logging.info(f"Head '{head_config.head_name}' training dataset size: {dataset_size}")
 
         train_loader_head = torch_geometric.dataloader.DataLoader(
@@ -671,6 +678,12 @@ def run(args) -> None:
     if not isinstance(valid_sets, dict):
         valid_sets = {"Default": valid_sets}
     for head, valid_set in valid_sets.items():
+        if args.max_valid_samples is not None:
+            max_valid = min(args.max_valid_samples, len(valid_set))
+            if isinstance(valid_set, list):
+                valid_set = valid_set[:max_valid]
+            else:
+                valid_set = torch.utils.data.Subset(valid_set, range(max_valid))
         valid_loaders[head] = torch_geometric.dataloader.DataLoader(
             dataset=valid_set,
             batch_size=args.valid_batch_size,

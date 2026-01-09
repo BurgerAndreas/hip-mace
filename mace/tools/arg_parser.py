@@ -400,6 +400,20 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         required=False,
     )
     parser.add_argument(
+        "--max_train_samples",
+        help="Limit the number of training samples to load (None loads all)",
+        type=int,
+        default=None,
+        required=False,
+    )
+    parser.add_argument(
+        "--max_valid_samples",
+        help="Limit the number of validation samples to load (None loads all)",
+        type=int,
+        default=None,
+        required=False,
+    )
+    parser.add_argument(
         "--test_file",
         help="Test set .xyz pt .h5 file",
         type=str,
