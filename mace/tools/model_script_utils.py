@@ -193,6 +193,9 @@ def configure_model(
             hessian_use_last_layer_only=args.hessian_use_last_layer_only,
             hessian_r_max=args.hessian_r_max,
             hessian_edge_lmax=args.hessian_edge_lmax,
+            hessian_use_radial=args.hessian_use_radial,
+            hessian_use_both_nodes=args.hessian_use_both_nodes,
+            hessian_aggregation=args.hessian_aggregation,
         )
         model_config_foundation = None
 

@@ -285,6 +285,25 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=3,
     )
     parser.add_argument(
+        "--hessian_use_radial",
+        help="Use radial embeddings for distance-dependent Hessian edge features",
+        type=str2bool,
+        default=True,
+    )
+    parser.add_argument(
+        "--hessian_use_both_nodes",
+        help="Use both source and target node features (h_i and h_j) for Hessian edge features",
+        type=str2bool,
+        default=True,
+    )
+    parser.add_argument(
+        "--hessian_aggregation",
+        help="Aggregation method for combining layer features: 'mean' or 'learnable'",
+        type=str,
+        default="learnable",
+        choices=["mean", "learnable"],
+    )
+    parser.add_argument(
         "--MLP_irreps",
         help="hidden irreps of the MLP in last readout",
         type=str,

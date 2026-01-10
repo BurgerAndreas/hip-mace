@@ -86,6 +86,9 @@ class MACE(torch.nn.Module):
         hessian_use_last_layer_only: bool = True,
         hessian_r_max: float = 16.0,
         hessian_edge_lmax: int = 3, # 2 or 3
+        hessian_use_radial: bool = True,  # Use radial embeddings
+        hessian_use_both_nodes: bool = True,  # Use both h_i and h_j
+        hessian_aggregation: str = "learnable",  # "mean", "learnable"
     ):
         super().__init__()
         self.register_buffer(
@@ -330,11 +333,47 @@ class MACE(torch.nn.Module):
                 sh_irreps, normalize=True, normalization="component"
             )
             
+            # Store flags for feature computation
+            self.hessian_use_radial = hessian_use_radial
+            self.hessian_use_both_nodes = hessian_use_both_nodes
+            self.hessian_aggregation = hessian_aggregation
+            
+            # If using both nodes, need to combine h_i and h_j
+            if hessian_use_both_nodes:
+                # Combine two node features: h_i and h_j -> combined features
+                # Options: concatenate and project, or add and project
+                # Using addition + projection for simplicity and equivariance
+                self.hessian_node_combine = o3.Linear(
+                    irreps_in=hidden_irreps,
+                    irreps_out=hidden_irreps
+                )
+            
+            # If using radial features, need to incorporate them
+            if hessian_use_radial:
+                # Radial features are scalar (0e), so we can use them to gate/modulate
+                # the edge features. Create a projection from radial features to modulate
+                # the tensor product output.
+                radial_irreps = o3.Irreps(f"{self.radial_embedding.out_dim}x0e")
+                # Project radial features to match hessian_out_irreps for gating
+                self.hessian_radial_proj = o3.Linear(
+                    irreps_in=radial_irreps,
+                    irreps_out=hessian_out_irreps
+                )
+            
+            # Tensor product: node features x spherical harmonics -> hessian features
             self.edge_tp = o3.FullyConnectedTensorProduct(
                 irreps_in1=hidden_irreps,
                 irreps_in2=sh_irreps, 
                 irreps_out=hessian_out_irreps
             )
+            
+            # Learnable layer aggregation weights (if using learnable aggregation)
+            if hessian_aggregation == "learnable":
+                # Learnable logits for softmax weighting across layers
+                # Initialize with zeros so initial weights are uniform (softmax(0) = 1/n)
+                self.hessian_layer_weights_param = torch.nn.Parameter(
+                    torch.zeros(num_interactions)
+                )
             
             # Output: One channel per degree (1+3+5 = 9 total elements)
             # All Even parity (e) for Hessian
@@ -557,6 +596,20 @@ class MACE(torch.nn.Module):
             edge_distance_vec_hessian.to(node_feats_list[0].dtype)
         )
         
+        # Compute radial embeddings for Hessian edges (if enabled)
+        edge_feats_hessian = None
+        if self.hessian_use_radial:
+            # Ensure edge_distance_hessian is [E, 1] for radial_embedding
+            edge_lengths_hessian = edge_distance_hessian
+            if edge_lengths_hessian.dim() == 1:
+                edge_lengths_hessian = edge_lengths_hessian.unsqueeze(-1)
+            edge_feats_hessian, _ = self.radial_embedding(
+                edge_lengths_hessian,
+                data["node_attrs"],
+                edge_index_hessian,
+                self.atomic_numbers
+            )
+        
         # Make l=0,1,2 node and edge features for the Hessian
         diag_feats_list = []
         off_diag_feats_list = []
@@ -572,27 +625,52 @@ class MACE(torch.nn.Module):
                 diag_feats = self.hessian_proj_nodes_layerwise(node_feats)
                 
                 # Off-Diagonal Features (Per Edge)
-                # Select features of neighbor j (source node)
                 # j->i convention
-                # Mace edge_index contains both directions
-                # so we are producing both i->j and j->i features
-                # and need to symmetrize them later.
-                j, i = edge_index_hessian # [E], [E]  
+                j, i_idx = edge_index_hessian # [E], [E]  
                 h_j = node_feats[j] # [E, C]
-                # Consider full message passing here
-                # Compute TP(h_j, Y_ij) -> produces 0e, 1e, 2e
+                
+                # Use both source and target node features if enabled
+                if self.hessian_use_both_nodes:
+                    h_i = node_feats[i_idx] # [E, C]
+                    # Combine h_i and h_j: add and project
+                    h_combined = self.hessian_node_combine(h_i + h_j)
+                else:
+                    h_combined = h_j
+                
+                # Compute tensor product: TP(h_combined, Y_ij) -> produces 0e, 1e, 2e
                 off_diag_feats = self.edge_tp(
-                    h_j, 
+                    h_combined, 
                     edge_attrs_hessian, # [E, L]
                 )
+                
+                # Incorporate radial features if enabled
+                if self.hessian_use_radial and edge_feats_hessian is not None:
+                    # Project radial features and use them to gate/modulate edge features
+                    radial_proj = self.hessian_radial_proj(edge_feats_hessian)
+                    # Element-wise multiplication (gating) with radial features
+                    off_diag_feats = off_diag_feats * (1.0 + radial_proj)
+                
                 diag_feats_list.append(diag_feats)
                 off_diag_feats_list.append(off_diag_feats)
         
         # Aggregation (if using multiple layers)
-        # [BN, out_irreps]
-        diag_out = torch.stack(diag_feats_list, dim=0).mean(dim=0) 
-        # [E, out_irreps]
-        off_diag_out = torch.stack(off_diag_feats_list, dim=0).mean(dim=0)
+        diag_stacked = torch.stack(diag_feats_list, dim=0)  # [num_layers, BN, out_irreps]
+        off_diag_stacked = torch.stack(off_diag_feats_list, dim=0)  # [num_layers, E, out_irreps]
+        
+        if self.hessian_aggregation == "learnable" and len(diag_feats_list) > 1:
+            # Use learnable weights: softmax over learnable parameters
+            weights = torch.softmax(self.hessian_layer_weights_param[:len(diag_feats_list)], dim=0)
+            weights = weights.view(-1, 1, 1)  # [num_layers, 1, 1]
+            # [BN, out_irreps]
+            diag_out = (diag_stacked * weights).sum(dim=0)
+            # [E, out_irreps]
+            off_diag_out = (off_diag_stacked * weights).sum(dim=0)
+        else:
+            # Simple mean aggregation
+            # [BN, out_irreps]
+            diag_out = diag_stacked.mean(dim=0)
+            # [E, out_irreps]
+            off_diag_out = off_diag_stacked.mean(dim=0)
         
         # o3.Linear layer to project node_feats
         # onto the target irreps 1x0e + 1x1e + 1x2e = 9
