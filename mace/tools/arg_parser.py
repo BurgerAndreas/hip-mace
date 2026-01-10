@@ -914,6 +914,12 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         "--eval_interval", help="evaluate model every <n> epochs", type=int, default=1
     )
     parser.add_argument(
+        "--samples_per_epoch",
+        help="Stop each training epoch after this many samples (None uses full epoch)",
+        type=int,
+        default=None,
+    )
+    parser.add_argument(
         "--keep_checkpoints",
         help="keep all checkpoints",
         action="store_true",

@@ -876,6 +876,7 @@ def run(args) -> None:
         plotter=plotter,
         train_sampler=train_sampler,
         rank=rank,
+        samples_per_epoch=args.samples_per_epoch,
     )
 
     logging.info("")

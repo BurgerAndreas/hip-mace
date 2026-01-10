@@ -189,6 +189,7 @@ def train(
     distributed_model: Optional[DistributedDataParallel] = None,
     train_sampler: Optional[DistributedSampler] = None,
     rank: Optional[int] = 0,
+    samples_per_epoch: Optional[int] = None,
 ):
     lowest_loss = np.inf
     valid_loss = np.inf
@@ -272,6 +273,7 @@ def train(
             distributed=distributed,
             distributed_model=distributed_model,
             rank=rank,
+            samples_per_epoch=samples_per_epoch,
         )
         if distributed:
             torch.distributed.barrier()
@@ -409,6 +411,7 @@ def train_one_epoch(
     distributed: bool,
     distributed_model: Optional[DistributedDataParallel] = None,
     rank: Optional[int] = 0,
+    samples_per_epoch: Optional[int] = None,
 ) -> float:
     model_to_train = model if distributed_model is None else distributed_model
 
@@ -416,6 +419,8 @@ def train_one_epoch(
     total_samples = 0
 
     if isinstance(optimizer, LBFGS):
+        if samples_per_epoch is not None:
+            logging.warning("samples_per_epoch is ignored when using LBFGS optimizer")
         loss, opt_metrics = take_step_lbfgs(
             model=model_to_train,
             loss_fn=loss_fn,
@@ -436,6 +441,8 @@ def train_one_epoch(
             logger.log(opt_metrics)
     else:
         for batch in data_loader:
+            if samples_per_epoch is not None and total_samples >= samples_per_epoch:
+                break
             loss, opt_metrics = take_step(
                 model=model_to_train,
                 loss_fn=loss_fn,
@@ -453,6 +460,8 @@ def train_one_epoch(
             opt_metrics["epoch"] = epoch
             if rank == 0:
                 logger.log(opt_metrics)
+            if samples_per_epoch is not None and total_samples >= samples_per_epoch:
+                break
     avg_loss = total_loss / max(total_samples, 1)
     return avg_loss
 

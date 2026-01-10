@@ -48,6 +48,7 @@ train_file: ~/.cache/kagglehub/datasets/yunhonghan/hessian-dataset-for-optimizin
 valid_file: ~/.cache/kagglehub/datasets/yunhonghan/hessian-dataset-for-optimizing-reactive-mliphorm/versions/5/ts1x-val.h5
 valid_fraction: 0.1 # only used when no explicit validation file is given
 max_valid_samples: 2000
+samples_per_epoch: 10000 # stop the epoch early after this many samples
 test_file: null
 test_dir: null
 num_workers: 0
