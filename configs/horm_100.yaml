@@ -51,7 +51,7 @@ test_file: null
 test_dir: null
 num_workers: 0
 pin_memory: true
-atomic_numbers: "[1, 6, 7, 8]"
+atomic_numbers: "[1, 6, 7, 8, 9]"
 mean: -611.9894409179688
 std: 0.38076332211494446
 statistics_file: null
