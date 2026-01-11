@@ -89,6 +89,8 @@ class MACE(torch.nn.Module):
         hessian_use_radial: bool = True,  # Use radial embeddings
         hessian_use_both_nodes: bool = True,  # Use both h_i and h_j
         hessian_aggregation: str = "learnable",  # "mean", "learnable"
+        hessian_edge_feature_method: str = "edge_tp",  # "edge_tp" or "message_passing"
+        hessian_message_passing_layer: Optional[int] = None,  # Which interaction layer to use (None = last)
     ):
         super().__init__()
         self.register_buffer(
@@ -337,6 +339,12 @@ class MACE(torch.nn.Module):
             self.hessian_use_radial = hessian_use_radial
             self.hessian_use_both_nodes = hessian_use_both_nodes
             self.hessian_aggregation = hessian_aggregation
+            self.hessian_edge_feature_method = hessian_edge_feature_method
+            self.hessian_message_passing_layer = hessian_message_passing_layer
+            
+            # Validate hessian_edge_feature_method
+            assert hessian_edge_feature_method in ["edge_tp", "message_passing"], \
+                f"hessian_edge_feature_method must be 'edge_tp' or 'message_passing', got {hessian_edge_feature_method}"
             
             # If using both nodes, need to combine h_i and h_j
             if hessian_use_both_nodes:
@@ -380,6 +388,38 @@ class MACE(torch.nn.Module):
             # The Linear layer reduces multiplicity hessian_out_irreps -> 1
             self.hessian_proj_nodes = o3.Linear(hessian_out_irreps, o3.Irreps("1x0e + 1x1e + 1x2e"))
             self.hessian_proj_edges = o3.Linear(hessian_out_irreps, o3.Irreps("1x0e + 1x1e + 1x2e"))
+            
+            # If using message passing, create a dedicated interaction block for Hessian edge features
+            if hessian_edge_feature_method == "message_passing":
+                # Create a specialized interaction block for Hessian edge features
+                # Use the same interaction class as the main model
+                # Configure it specifically for Hessian edge feature extraction
+                hessian_edge_feats_irreps = o3.Irreps(f"{self.radial_embedding.out_dim}x0e")
+                
+                # Compute interaction irreps for Hessian: sh_irreps * hidden_irreps
+                num_features = hidden_irreps.count(o3.Irrep(0, 1))
+                hessian_interaction_irreps = (sh_irreps * num_features).sort()[0].simplify()
+                
+                # Create the Hessian-specific interaction block
+                self.hessian_interaction = interaction_cls(
+                    node_attrs_irreps=node_attr_irreps,
+                    node_feats_irreps=hidden_irreps,
+                    edge_attrs_irreps=sh_irreps,
+                    edge_feats_irreps=hessian_edge_feats_irreps,
+                    target_irreps=hessian_interaction_irreps,
+                    hidden_irreps=hidden_irreps,
+                    avg_num_neighbors=avg_num_neighbors,
+                    edge_irreps=edge_irreps,
+                    radial_MLP=radial_MLP,
+                    cueq_config=cueq_config,
+                    oeq_config=oeq_config,
+                )
+                
+                # Create projection layer from interaction irreps to hessian_out_irreps
+                self.hessian_message_proj = o3.Linear(
+                    irreps_in=hessian_interaction_irreps,
+                    irreps_out=hessian_out_irreps
+                )
 
     def forward(
         self,
@@ -564,6 +604,35 @@ class MACE(torch.nn.Module):
             "hessian": hessian,
         }
     
+    def _extract_raw_messages_from_interaction(
+        self,
+        interaction: InteractionBlock,
+        node_attrs: torch.Tensor,
+        node_feats: torch.Tensor,
+        edge_attrs: torch.Tensor,
+        edge_feats: torch.Tensor,
+        edge_index: torch.Tensor,
+        cutoff: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """Extract per-edge messages from an interaction block before aggregation.
+        
+        Returns:
+            mji: [n_edges, irreps] - raw messages per edge
+        """
+        result = interaction(
+            node_attrs=node_attrs,
+            node_feats=node_feats,
+            edge_attrs=edge_attrs,
+            edge_feats=edge_feats,
+            edge_index=edge_index,
+            cutoff=cutoff,
+            return_raw_messages=True,
+        )
+        if isinstance(result, tuple):
+            return result[0]  # Return the messages, not the sc
+        return result
+        
+    
     def _predict_hessian_hip(self, data, node_feats_list) -> torch.Tensor:
         """Predict Hessian from l=0,1,2 features."""
         # Compute the graph for the Hessian
@@ -624,27 +693,45 @@ class MACE(torch.nn.Module):
                 # [BN, C] -> [BN, C']
                 diag_feats = self.hessian_proj_nodes_layerwise(node_feats)
                 
-                # Off-Diagonal Features (Per Edge)
-                # j->i convention
-                j, i_idx = edge_index_hessian # [E], [E]  
-                h_j = node_feats[j] # [E, C]
-                
-                # Use both source and target node features if enabled
-                if self.hessian_use_both_nodes:
-                    h_i = node_feats[i_idx] # [E, C]
-                    # Combine h_i and h_j: add and project
-                    h_combined = self.hessian_node_combine(h_i + h_j)
+                # Off-Diagonal Features (Per Edge) - choose method
+                if self.hessian_edge_feature_method == "message_passing":
+                    # Use dedicated Hessian interaction block for message passing
+                    
+                    # Extract per-edge messages before aggregation using the Hessian-specific interaction
+                    raw_messages = self._extract_raw_messages_from_interaction(
+                        interaction=self.hessian_interaction,
+                        node_attrs=data["node_attrs"],
+                        node_feats=node_feats,
+                        edge_attrs=edge_attrs_hessian,
+                        edge_feats=edge_feats_hessian,
+                        edge_index=edge_index_hessian,
+                        cutoff=None,  # Cutoff already applied in radial embedding if needed
+                    )
+                    
+                    # Project raw messages to hessian output irreps
+                    off_diag_feats = self.hessian_message_proj(raw_messages)
                 else:
-                    h_combined = h_j
+                    # Use tensor product approach (edge_tp)
+                    # j->i convention
+                    j, i_idx = edge_index_hessian # [E], [E]  
+                    h_j = node_feats[j] # [E, C]
+                    
+                    # Use both source and target node features if enabled
+                    if self.hessian_use_both_nodes:
+                        h_i = node_feats[i_idx] # [E, C]
+                        # Combine h_i and h_j: add and project
+                        h_combined = self.hessian_node_combine(h_i + h_j)
+                    else:
+                        h_combined = h_j
+                    
+                    # Compute tensor product: TP(h_combined, Y_ij) -> produces 0e, 1e, 2e
+                    off_diag_feats = self.edge_tp(
+                        h_combined, 
+                        edge_attrs_hessian, # [E, L]
+                    )
                 
-                # Compute tensor product: TP(h_combined, Y_ij) -> produces 0e, 1e, 2e
-                off_diag_feats = self.edge_tp(
-                    h_combined, 
-                    edge_attrs_hessian, # [E, L]
-                )
-                
-                # Incorporate radial features if enabled
-                if self.hessian_use_radial and edge_feats_hessian is not None:
+                # Incorporate radial features if enabled (only for edge_tp method)
+                if self.hessian_edge_feature_method == "edge_tp" and self.hessian_use_radial:
                     # Project radial features and use them to gate/modulate edge features
                     radial_proj = self.hessian_radial_proj(edge_feats_hessian)
                     # Element-wise multiplication (gating) with radial features

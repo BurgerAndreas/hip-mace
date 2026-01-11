@@ -77,7 +77,7 @@ weight_decay: 0.0000005
 amsgrad: true
 scheduler: ReduceLROnPlateau
 lr_factor: 0.8
-scheduler_patience: 50
+scheduler_patience: 500
 lr_scheduler_gamma: 0.9993
 swa: false
 ema: false

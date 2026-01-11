@@ -601,6 +601,7 @@ class RealAgnosticInteractionBlock(InteractionBlock):
         lammps_natoms: Tuple[int, int] = (0, 0),
         lammps_class: Optional[Any] = None,
         first_layer: bool = False,
+        return_raw_messages: bool = False,
     ) -> Tuple[torch.Tensor, None]:
         n_real = lammps_natoms[0] if lammps_class is not None else None
         node_feats = self.linear_up(node_feats)
@@ -620,7 +621,10 @@ class RealAgnosticInteractionBlock(InteractionBlock):
         else:
             mji = self.conv_tp(
                 node_feats[edge_index[0]], edge_attrs, tp_weights
-            )  # [n_nodes, irreps]
+            )  # [n_edges, irreps]
+            # raw messages per edge
+            if return_raw_messages:
+                return mji
             message = scatter_sum(
                 src=mji, index=edge_index[1], dim=0, dim_size=node_feats.shape[0]
             )
@@ -821,6 +825,7 @@ class RealAgnosticDensityInteractionBlock(InteractionBlock):
         lammps_class: Optional[Any] = None,
         lammps_natoms: Tuple[int, int] = (0, 0),
         first_layer: bool = False,
+        return_raw_messages: bool = False,
     ) -> Tuple[torch.Tensor, None]:
         receiver = edge_index[1]
         num_nodes = node_feats.shape[0]
@@ -846,7 +851,10 @@ class RealAgnosticDensityInteractionBlock(InteractionBlock):
         else:
             mji = self.conv_tp(
                 node_feats[edge_index[0]], edge_attrs, tp_weights
-            )  # [n_nodes, irreps]
+            )  # [n_edges, irreps]
+            # raw messages per edge
+            if return_raw_messages:
+                return mji
             message = scatter_sum(
                 src=mji, index=edge_index[1], dim=0, dim_size=node_feats.shape[0]
             )
@@ -943,6 +951,7 @@ class RealAgnosticDensityResidualInteractionBlock(InteractionBlock):
         lammps_class: Optional[Any] = None,
         lammps_natoms: Tuple[int, int] = (0, 0),
         first_layer: bool = False,
+        return_raw_messages: bool = False,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         receiver = edge_index[1]
         num_nodes = node_feats.shape[0]
@@ -970,7 +979,10 @@ class RealAgnosticDensityResidualInteractionBlock(InteractionBlock):
         else:
             mji = self.conv_tp(
                 node_feats[edge_index[0]], edge_attrs, tp_weights
-            )  # [n_nodes, irreps]
+            )  # [n_edges, irreps]
+            # raw messages per edge
+            if return_raw_messages:
+                return mji
             message = scatter_sum(
                 src=mji, index=edge_index[1], dim=0, dim_size=node_feats.shape[0]
             )
@@ -1066,6 +1078,7 @@ class RealAgnosticAttResidualInteractionBlock(InteractionBlock):
         lammps_class: Optional[Any] = None,
         lammps_natoms: Tuple[int, int] = (0, 0),
         first_layer: bool = False,
+        return_raw_messages: bool = False,
     ) -> Tuple[torch.Tensor, None]:
         sender = edge_index[0]
         receiver = edge_index[1]
@@ -1089,7 +1102,10 @@ class RealAgnosticAttResidualInteractionBlock(InteractionBlock):
         else:
             mji = self.conv_tp(
                 node_feats_up[edge_index[0]], edge_attrs, tp_weights
-            )  # [n_nodes, irreps]
+            )  # [n_edges, irreps]
+            # raw messages per edge
+            if return_raw_messages:
+                return mji
             message = scatter_sum(
                 src=mji, index=edge_index[1], dim=0, dim_size=node_feats.shape[0]
             )
@@ -1239,6 +1255,7 @@ class RealAgnosticResidualNonLinearInteractionBlock(InteractionBlock):
         lammps_class: Optional[Any] = None,
         lammps_natoms: Tuple[int, int] = (0, 0),
         first_layer: bool = False,
+        return_raw_messages: bool = False,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         num_nodes = node_feats.shape[0]
         n_real = lammps_natoms[0] if lammps_class is not None else None
@@ -1278,6 +1295,9 @@ class RealAgnosticResidualNonLinearInteractionBlock(InteractionBlock):
             mji = self.conv_tp(
                 node_feats[edge_index[0]], edge_attrs, tp_weights
             )  # [n_edges, irreps]
+            # raw messages per edge
+            if return_raw_messages:
+                return mji
             message = scatter_sum(
                 src=mji, index=edge_index[1], dim=0, dim_size=num_nodes
             )  # [n_nodes, irreps]
