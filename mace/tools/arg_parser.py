@@ -279,6 +279,19 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=16.0,
     )
     parser.add_argument(
+        "--hessian_edge_feature_method",
+        help='Method for Hessian edge features: "edge_tp" or "message_passing"',
+        type=str,
+        default="edge_tp",
+        choices=["edge_tp", "message_passing"],
+    )
+    parser.add_argument(
+        "--hessian_message_passing_layer",
+        help="Which interaction layer to use for Hessian MP features (None = last)",
+        type=lambda x: int(x) if x.lower() != "none" else None,
+        default=None,
+    )
+    parser.add_argument(
         "--hessian_edge_lmax",
         help="Max l for spherical harmonics used in Hessian edge features (2 or 3)",
         type=int,
