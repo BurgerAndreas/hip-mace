@@ -503,8 +503,9 @@ def take_step(
     if ema is not None:
         ema.update()
 
+    loss = loss.detach().cpu()
     loss_dict = {
-        "loss": to_numpy(loss),
+        "loss": loss.numpy(),
         "time": time.time() - start_time,
     }
 
