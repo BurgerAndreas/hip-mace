@@ -12,6 +12,7 @@ from contextlib import nullcontext
 from typing import Any, Dict, List, Optional, Tuple, Union
 import warnings
 import os
+import sys
 import wandb
 
 import numpy as np
@@ -46,6 +47,9 @@ warnings.filterwarnings(
     message=".*TorchScript type system doesn't support instance-level annotations.*",
     category=UserWarning
 )
+
+# Store command line arguments as a string
+CMD_LINE_ARGS = " ".join(sys.argv)
 
 
 @dataclasses.dataclass
@@ -218,6 +222,7 @@ def train(
 
     logging.info("")
     logging.info("===========TRAINING===========")
+    logging.info(f"Command line arguments: {CMD_LINE_ARGS}")
     logging.info("Started training, reporting errors on validation set")
     logging.info("Loss metrics on validation set")
     epoch = start_epoch

@@ -12,6 +12,7 @@ import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
+import sys
 
 import numpy as np
 import torch
@@ -861,6 +862,9 @@ def setup_wandb(args: argparse.Namespace):
         resume="allow",
     )
     wandb.run.summary["params"] = args_dict_json
+    # write the wandb run id to file
+    with open(os.path.join(args.checkpoints_dir, "wandb_run_id.txt"), "w") as f:
+        f.write(wandb.run.id)
 
 
 def get_files_with_suffix(dir_path: str, suffix: str) -> List[str]:

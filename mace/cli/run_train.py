@@ -12,6 +12,7 @@ import os
 from copy import deepcopy
 from pathlib import Path
 from typing import List, Optional
+import sys
 
 import torch.distributed
 from e3nn.util import jit
@@ -68,12 +69,15 @@ from mace.tools.scripts_utils import (
 from mace.tools.tables_utils import create_error_table
 from mace.tools.utils import AtomicNumberTable
 
+# Store command line arguments as a string
+CMD_LINE_ARGS = " ".join(sys.argv)
 
 def main() -> None:
     """
     This script runs the training/fine tuning for mace
     """
     args = tools.build_default_arg_parser().parse_args()
+    args.override_dirname = CMD_LINE_ARGS
     run(args)
 
 

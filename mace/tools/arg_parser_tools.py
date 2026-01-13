@@ -4,6 +4,7 @@ import time
 import yaml
 import numpy as np
 from e3nn import o3
+import sys
 
 def args_to_dict(args):
     args_dict = vars(args)
@@ -35,6 +36,11 @@ def check_args(args):
         args.results_dir = os.path.join(args.work_dir, "results", run_id)
     if args.downloads_dir is None:
         args.downloads_dir = os.path.join(args.work_dir, "downloads")
+    
+    # Store command line arguments as a string
+    CMD_LINE_ARGS = " ".join(sys.argv)
+    if not args.wandb_name or args.wandb_name == "":
+        args.wandb_name = CMD_LINE_ARGS
     
     # save training config to a yaml file
     args_dict = args_to_dict(args)
