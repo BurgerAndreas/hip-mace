@@ -781,7 +781,7 @@ def get_params_options(
         ],
         lr=args.lr,
         amsgrad=args.amsgrad,
-        betas=(args.beta, 0.999),
+        betas=(args.beta, args.beta),
     )
     if hasattr(model, "joint_embedding") and model.joint_embedding is not None:
         param_options["params"].append(
