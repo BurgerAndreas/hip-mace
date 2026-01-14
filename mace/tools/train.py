@@ -260,6 +260,7 @@ def train(
                 swa.scheduler.step()
 
         # Train
+        epoch_start_time = time.time()
         if distributed:
             train_sampler.set_epoch(epoch)
         if "ScheduleFree" in type(optimizer).__name__:
@@ -280,6 +281,7 @@ def train(
             rank=rank,
             samples_per_epoch=samples_per_epoch,
         )
+        epoch_time = time.time() - epoch_start_time
         if distributed:
             torch.distributed.barrier()
         if log_wandb:
@@ -297,6 +299,7 @@ def train(
             log_data = {
                 "train/loss": avg_epoch_loss,
                 "train/epoch": epoch,
+                "train/time_per_epoch": epoch_time,
             }
             if lr is not None:
                 log_data["train/lr"] = lr

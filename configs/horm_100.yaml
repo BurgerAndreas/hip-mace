@@ -27,7 +27,7 @@ correlation: 3
 num_interactions: 2
 MLP_irreps: "16x0e"
 radial_MLP: "[64, 64, 64]"
-hidden_irreps: "128x0e + 128x1o"
+hidden_irreps: "128x0e + 128x1o + 128x2e"
 edge_irreps: null
 max_L: null
 avg_num_neighbors: 12.876944541931152
@@ -37,7 +37,7 @@ predict_hessian: false # for HIP
 
 # ====== HIP / Hessian prediction ======
 hip: false
-hessian_feature_dim: 128
+hessian_feature_dim: 64
 hessian_use_last_layer_only: false
 hessian_r_max: 16.0
 hessian_edge_lmax: 3

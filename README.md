@@ -25,12 +25,11 @@ uv run tests/test_equivariance.py
 Train HIP-MACE to overfit a small subset of 100 datapoints
 ```bash
 # with HIP
-uv run scripts/run_train.py --config=configs/horm_100.yaml --hidden_irreps="128x0e + 128x1o + 128x2e" --hip=true --loss="l1l2l1energyforceshessian" --predict_hessian=true --error_table="TotalMAEHessian"
+uv run scripts/run_train.py --config=configs/horm_100.yaml --hip=true --loss="l1l2l1energyforceshessian" --predict_hessian=true --error_table="TotalMAEHessian"
 # --batch_size=4 --valid_batch_size=4
 
 # without HIP (energy and forces)
 uv run scripts/run_train.py --config=configs/horm_100.yaml
-uv run scripts/run_train.py --config=configs/horm_100.yaml --hidden_irreps="128x0e + 128x1o + 128x2e"
 ```
 
 Get and processed the data
@@ -47,16 +46,15 @@ uv run scripts/convert_lmdb_to_h5.py --in_file "ts1x_hess_train_big.lmdb"
 
 Train HIP-MACE on the full dataset
 ```bash
-uv run scripts/run_train.py --config=configs/horm_t1x_.yaml --hidden_irreps="128x0e + 128x1o + 128x2e" --hip=true --loss="l1l2l1energyforceshessian" --predict_hessian=true --error_table="TotalMAEHessian"
+uv run scripts/run_train.py --config=configs/horm_t1x_.yaml --hip=true --loss="l1l2l1energyforceshessian" --predict_hessian=true --error_table="TotalMAEHessian"
 ```
 
 Train regular MACE model on just energy and forces
 ```bash
 uv run scripts/run_train.py --config=configs/horm_t1x_.yaml
-uv run scripts/run_train.py --config=configs/horm_t1x_.yaml --hidden_irreps="128x0e + 128x1o + 128x2e"
 ```
 
-Compare HIP-MACE to autograd Hessians from regular MACE
+Compare HIP-MACE to autograd Hessians from regular MACE (will run automatically at the end of training)
 ```bash
 uv run scripts/eval_horm.py
 ```
