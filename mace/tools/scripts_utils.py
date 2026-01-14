@@ -870,6 +870,26 @@ class LRScheduler:
                 factor=args.lr_factor,
                 patience=args.scheduler_patience,
             )
+        elif args.scheduler == "CosineAnnealingLR":
+            warmup_epochs = getattr(args, "warmup_epochs", 0)
+            min_lr = getattr(args, "min_lr", 0.0)
+            max_num_epochs = args.max_num_epochs
+            base_lr = args.lr
+            
+            def lr_lambda(epoch):
+                if warmup_epochs > 0 and epoch < warmup_epochs:
+                    return (epoch + 1) / warmup_epochs
+                else:
+                    if warmup_epochs > 0:
+                        progress = (epoch - warmup_epochs) / max(1, max_num_epochs - warmup_epochs)
+                    else:
+                        progress = epoch / max(1, max_num_epochs)
+                    cosine_factor = 0.5 * (1 + np.cos(np.pi * progress))
+                    return min_lr / base_lr + (1 - min_lr / base_lr) * cosine_factor
+            
+            self.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
+                optimizer=optimizer, lr_lambda=lr_lambda
+            )
         else:
             raise RuntimeError(f"Unknown scheduler: '{args.scheduler}'")
 
@@ -882,6 +902,11 @@ class LRScheduler:
             self.lr_scheduler.step(  # pylint: disable=E1123
                 metrics=metrics, epoch=epoch
             )
+        elif self.scheduler == "CosineAnnealingLR":
+            if epoch is not None:
+                self.lr_scheduler.step(epoch=epoch)
+            else:
+                self.lr_scheduler.step()
 
     def __getattr__(self, name):
         if name == "step":

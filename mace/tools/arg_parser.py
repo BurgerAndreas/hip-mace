@@ -894,6 +894,18 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=0.9993,
     )
     parser.add_argument(
+        "--warmup_epochs",
+        help="Number of warmup epochs for cosine scheduler",
+        type=int,
+        default=0,
+    )
+    parser.add_argument(
+        "--min_lr",
+        help="Minimum learning rate for cosine scheduler",
+        type=float,
+        default=0.0,
+    )
+    parser.add_argument(
         "--swa",
         "--stage_two",
         help="use Stage Two loss weight, which decreases the learning rate and increases the energy weight at the end of the training to help converge them",

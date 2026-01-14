@@ -77,16 +77,18 @@ beta: 0.9
 batch_size: 64
 valid_batch_size: 64
 lr: 0.01
-weight_decay: 0.0000005
+weight_decay: 5e-7
 amsgrad: true
 scheduler: ReduceLROnPlateau
 lr_factor: 0.8
 scheduler_patience: 5
 lr_scheduler_gamma: 0.9993
-swa: false
-ema: false
+warmup_epochs: 100
+min_lr: 0.0001
+swa: false # stochastic weight averaging
+ema: false # exponential moving average
 ema_decay: 0.99
-max_num_epochs: 10000
+max_num_epochs: 100
 patience: 2048
 eval_interval: 1
 
