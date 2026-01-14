@@ -37,8 +37,8 @@ predict_hessian: false # for HIP
 
 # ====== HIP / Hessian prediction ======
 hip: false
-hessian_feature_dim: 32
-hessian_use_last_layer_only: true
+hessian_feature_dim: 128
+hessian_use_last_layer_only: false
 hessian_r_max: 16.0
 hessian_edge_lmax: 3
 

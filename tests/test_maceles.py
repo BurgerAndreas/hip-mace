@@ -292,7 +292,15 @@ def maceles_model_path_fixture(tmp_path: Path) -> Path:
 
 @pytest.mark.skipif(not LES_AVAILABLE, reason="LES library is not available")
 def test_run_eval_with_bec(tmp_path: Path, maceles_model_path: Path, fitting_configs):
-    """Tests running evaluation with BEC computation enabled."""
+    """Tests running evaluation with BEC (Born Effective Charges) computation enabled.
+    
+    BEC (Born Effective Charges) are tensors that describe the change in polarization
+    with respect to atomic displacements, important for predicting infrared spectra
+    and dielectric properties.
+    
+    LES (Latent Ewald Summation) is a method for handling long-range electrostatic
+    interactions in machine learning potentials through latent charge representations.
+    """
     output_path = tmp_path / "output.xyz"
     ase.io.write(tmp_path / "fit.xyz", fitting_configs)
     args = argparse.Namespace(

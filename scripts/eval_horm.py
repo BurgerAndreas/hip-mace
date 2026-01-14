@@ -7,27 +7,97 @@ import os
 from tqdm import tqdm
 from torch_geometric.loader import DataLoader as TGDataLoader
 
-from mace.data import AtomicData, AtomicDataset
-from mace.tools import to_numpy
-from mace.modules.frequency_analysis import analyze_frequencies_np
-from mace.tools import Z_TO_ATOM_SYMBOL
-from mace.tools.checkpoint import load_checkpoint
-from mace.calculators.mace import MACECalculator
+from mace import data, modules, tools
 
-def evaluate(
-    lmdb_path,
-    checkpoint_path,
-    config_path,  # not used
-    hessian_method,
+from mace.modules.frequency_analysis import analyze_frequencies_np, Z_TO_ATOM_SYMBOL
+from mace.tools.checkpoint import CheckpointIO, CheckpointBuilder
+from mace.calculators.mace import MACECalculator
+from mace.tools.run_train_utils import (
+    combine_datasets,
+    load_dataset_for_path,
+    normalize_file_paths,
+)
+from mace.tools.multihead_tools import (
+    HeadConfig,
+    apply_pseudolabels_to_pt_head_configs,
+    assemble_replay_data,
+    dict_head_to_dataclass,
+    prepare_default_head,
+    prepare_pt_head,
+)
+from mace.data import KeySpecification, update_keyspec_from_kwargs
+
+import argparse
+from typing import Dict
+
+import ase.data
+import ase.io
+import numpy as np
+import torch
+from e3nn import o3
+import glob
+
+from mace import data
+from mace.cli.convert_e3nn_cueq import run as run_e3nn_to_cueq
+from mace.modules.utils import extract_invariant
+from mace.tools import torch_geometric, torch_tools, utils
+
+def evaluate_hessian_on_horm_dataset(
+    args: argparse.Namespace,
     max_samples=None,
-    wandb_run_id=None,
-    wandb_kwargs={},
     redo=False,
 ):
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print("\n\n--- Evaluating Hessian on HORM dataset ---")
+    hessian_method = "predict" if args.predict_hessian else "autograd"
+    print("Hessian method: ", hessian_method)
+    
+    # checkpoint usually looks like this:
+    # checkpoints/20260105_112332/horm100_run-42/
+    # horm100_run-42_epoch-99.pt  horm100_run-42.model
+    # .model file ontains only the trained model weights and architecture, without optimizer state
+    model_files = glob.glob(str(args.checkpoints_dir + "/*.model"))
+    if len(model_files) == 0:
+        raise FileNotFoundError(f"No .model file found in {args.checkpoints_dir}: {os.listdir(args.checkpoints_dir)}")
+    if len(model_files) > 1:
+        raise ValueError(f"Multiple .model files found in {args.checkpoints_dir}: {model_files}")
+    checkpoint_path = model_files[0]
+    
+    torch_tools.set_default_dtype(args.default_dtype)
+    device = torch_tools.init_device(args.device)
 
+    # Load model
+    model = torch.load(f=checkpoint_path, map_location=args.device)
+    if args.enable_cueq:
+        print("Converting models to CuEq for acceleration")
+        model = run_e3nn_to_cueq(model, device=device)
+    # shouldn't be necessary but seems to help with CUDA problems
+    model = model.to(
+        args.device
+    )  
+
+    for param in model.parameters():
+        param.requires_grad = False
+
+    z_table = utils.AtomicNumberTable([int(z) for z in model.atomic_numbers])
+
+    args.key_specification = KeySpecification()
+    update_keyspec_from_kwargs(args.key_specification, vars(args))
+    dataset = load_dataset_for_path(
+        file_path=args.valid_file,
+        r_max=args.r_max,
+        z_table=z_table,
+        head_config=HeadConfig("default", args.key_specification),
+        heads=["Default"],
+    )
+    dataloader = torch_geometric.dataloader.DataLoader(
+        dataset=dataset,
+        batch_size=1,
+        shuffle=False,
+        drop_last=False,
+    )
+    
     # Set up save location
-    dataset_name = lmdb_path.split("/")[-1].split(".")[0]
+    dataset_name = args.valid_file.split("/")[-1].split(".")[0]
     results_dir = "results_evalhorm"
     os.makedirs(results_dir, exist_ok=True)
     ckpt_name = checkpoint_path.split("/")[-1].split(".")[0]
@@ -41,44 +111,33 @@ def evaluate(
         aggregated_results = None # only calculate below if re-evaluated
         return df_results, aggregated_results
 
-    # Load model using correct MACE checkpoint API
-    print(f"Loading model from {checkpoint_path}")
-    checkpoint = load_checkpoint(checkpoint_path, map_location=device)
-    model = checkpoint["model"]
-    model = model.to(device)
-    model.eval()
-
-    # Load dataset using MACE AtomicDataset
-    # Assumes dataset is a LMDB, see configs/horm_100.yaml
-    print(f"Loading data from {lmdb_path}")
-    dataset = AtomicDataset(lmdb_path)
-    dataloader = TGDataLoader(dataset, batch_size=1, shuffle=True)
 
     sample_metrics = []
     n_samples = 0
     n_total_samples = min(len(dataset), max_samples) if max_samples is not None else len(dataset)
 
     # Setup wandb if needed
-    if wandb_run_id is None:
-        wandb.init(
-            project="hip-mace",
-            name=f"{ckpt_name}_{hessian_method}_{max_samples if max_samples else 'all'}",
-            config={
-                "checkpoint": checkpoint_path,
-                "dataset": lmdb_path,
-                "max_samples": max_samples,
-                "model_name": "MACE",
-                "config_path": config_path,
-                "hessian_method": hessian_method,
-            },
-            tags=["hormmetrics"],
-            **wandb_kwargs,
-        )
+    wandb.init(
+        project=args.wandb_project,
+        name=f"{ckpt_name}_{hessian_method}_{max_samples if max_samples else 'all'}",
+        config={
+            "checkpoint_path": checkpoint_path,
+            "max_samples": max_samples,
+            "hessian_method": hessian_method,
+        },
+        tags=["hormmetrics"],
+        id=args.wandb_run_id,
+        #  If a run with the specified id exists, it will resume,
+        # otherwise, a new run will be created.
+        resume="allow", 
+    )
 
     # Main evaluation loop
     for batch in tqdm(dataloader, desc="Evaluating", total=n_total_samples):
         batch = batch.to(device)
-        n_atoms = batch.pos.shape[0]
+        n_atoms = batch["positions"].shape[0]
+        if n_samples == 0:
+            print(batch.keys)
 
         # TIMING for hessian only (not I/O)
         torch.cuda.synchronize()
@@ -88,22 +147,22 @@ def evaluate(
 
         # Forward pass: select autograd (default) or MACE HIP (predict) Hessian
         # Reference: test_hessian.py and test_hip.py
-        batch.requires_grad = True
-        with torch.no_grad() if hessian_method == "predict" else torch.enable_grad():
-            if hessian_method == "autograd":
-                # Use automatic differentiation (see tests/test_hessian.py)
-                mace_out = model(batch, compute_hessian=True)
-                hessian_model = mace_out["hessian"] # shape (n_atoms*3, n_atoms*3)
-                energy_model = mace_out["energy"]
-                force_model = mace_out["forces"]
-            elif hessian_method == "predict":
-                # Use HIP predicted hessian (see tests/test_hip.py)
-                mace_out = model(batch, predict_hessian=True)
-                hessian_model = mace_out["hessian"]
-                energy_model = mace_out["energy"]
-                force_model = mace_out["forces"]
-            else:
-                raise ValueError("Choose hessian_method from ['autograd', 'predict'].")
+        batch["positions"].requires_grad = True # for copmuting the forces
+        # with torch.no_grad() if hessian_method == "predict" else torch.enable_grad():
+        if hessian_method == "autograd":
+            # Use automatic differentiation (see tests/test_hessian.py)
+            mace_out = model(batch, compute_hessian=True, predict_hessian=False)
+            hessian_model = mace_out["hessian"] # shape (n_atoms*3, n_atoms*3)
+            energy_model = mace_out["energy"]
+            force_model = mace_out["forces"]
+        elif hessian_method == "predict":
+            # Use HIP predicted hessian (see tests/test_hip.py)
+            mace_out = model(batch, compute_hessian=False, predict_hessian=True)
+            hessian_model = mace_out["hessian"]
+            energy_model = mace_out["energy"]
+            force_model = mace_out["forces"]
+        else:
+            raise ValueError("Choose hessian_method from ['autograd', 'predict'].")
 
         end_event.record()
         torch.cuda.synchronize()
@@ -112,10 +171,10 @@ def evaluate(
 
         hessian_model = hessian_model.reshape(n_atoms * 3, n_atoms * 3)
 
-        # True data
-        ae_true = batch.y
-        force_true = batch.forces
-        hessian_true = batch.hessian.reshape(n_atoms * 3, n_atoms * 3)
+        # True data - using correct batch keys
+        ae_true = batch["energy"]
+        force_true = batch["forces"]
+        hessian_true = batch["hessian"].reshape(n_atoms * 3, n_atoms * 3)
 
         # Eigendecomposition
         eigvals_model, eigvecs_model = torch.linalg.eigh(hessian_model)
@@ -135,11 +194,14 @@ def evaluate(
         eigvec1_cos = torch.abs(torch.dot(eigvecs_model[:, 0], eigvecs_true[:, 0]))
         eigvec2_cos = torch.abs(torch.dot(eigvecs_model[:, 1], eigvecs_true[:, 1]))
 
+        # node_attrs is one-hot encoded, so we need to convert it to atomic numbers
+        batch["z"] = torch.tensor([z_table.index_to_z(z) for z in batch["node_attrs"].argmax(dim=-1)])
+        symbols = [Z_TO_ATOM_SYMBOL[z.item()] for z in batch["z"]]
+        
         # Analyze frequency & Eckart (mass weighting)
-        symbols = [Z_TO_ATOM_SYMBOL[z.item()] for z in batch.z]
         true_freqs = analyze_frequencies_np(
             hessian=hessian_true.detach().cpu().numpy(),
-            cart_coords=batch.pos.detach().cpu().numpy(),
+            cart_coords=batch["positions"].detach().cpu().numpy(),
             atomsymbols=symbols,
         )
         true_neg_num = true_freqs["neg_num"]
@@ -148,7 +210,7 @@ def evaluate(
 
         freqs_model = analyze_frequencies_np(
             hessian=hessian_model.detach().cpu().numpy(),
-            cart_coords=batch.pos.detach().cpu().numpy(),
+            cart_coords=batch["positions"].detach().cpu().numpy(),
             atomsymbols=symbols,
         )
         freqs_model_neg_num = freqs_model["neg_num"]
@@ -248,74 +310,72 @@ def evaluate(
     }
 
     wandb.log(aggregated_results)
-    if wandb_run_id is None:
-        wandb.finish()
+    wandb.finish()
 
     return df_results, aggregated_results
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Evaluate MACE model on dataset (autograd vs HIP hessian)")
-    parser.add_argument(
-        "--ckpt_path",
-        "-c",
-        type=str,
-        required=True,
-        help="Path to checkpoint file (MACE .pt)",
-    )
-    parser.add_argument(
-        "--config_path",
-        type=str,
-        default=None,
-        help="Path to config file. (not used)",
-    )
-    parser.add_argument(
-        "--hessian_method",
-        "-hm",
-        choices=["autograd", "predict"],
-        type=str,
-        required=True,
-        help="Hessian computation method: autograd (autodiff), predict (HIP/predicted)",
-    )
-    parser.add_argument(
-        "--dataset",
-        "-d",
-        type=str,
-        required=True,
-        help="Dataset file name or path (e.g. RGD1_100.lmdb, see configs/horm_100.yaml)",
-    )
-    parser.add_argument(
-        "--max_samples",
-        "-m",
-        type=int,
-        default=None,
-        help="Maximum number of samples to evaluate (default: all samples)",
-    )
-    parser.add_argument(
-        "--redo",
-        "-r",
-        type=bool,
-        default=False,
-        help="Run eval from scratch even if results already exist",
-    )
+# if __name__ == "__main__":
+#     parser = argparse.ArgumentParser(description="Evaluate MACE model on dataset (autograd vs HIP hessian)")
+#     parser.add_argument(
+#         "--ckpt_path",
+#         "-c",
+#         type=str,
+#         required=True,
+#         help="Path to checkpoint file (MACE .pt)",
+#     )
+#     parser.add_argument(
+#         "--config_path",
+#         type=str,
+#         default=None,
+#         help="Path to config file. (not used)",
+#     )
+#     parser.add_argument(
+#         "--hessian_method",
+#         "-hm",
+#         choices=["autograd", "predict"],
+#         type=str,
+#         required=True,
+#         help="Hessian computation method: autograd (autodiff), predict (HIP/predicted)",
+#     )
+#     parser.add_argument(
+#         "--dataset",
+#         "-d",
+#         type=str,
+#         required=True,
+#         help="Dataset file name or path (e.g. RGD1_100.lmdb, see configs/horm_100.yaml)",
+#     )
+#     parser.add_argument(
+#         "--max_samples",
+#         "-m",
+#         type=int,
+#         default=None,
+#         help="Maximum number of samples to evaluate (default: all samples)",
+#     )
+#     parser.add_argument(
+#         "--redo",
+#         "-r",
+#         type=bool,
+#         default=False,
+#         help="Run eval from scratch even if results already exist",
+#     )
 
-    args = parser.parse_args()
+#     args = parser.parse_args()
 
-    torch.manual_seed(42)
+#     torch.manual_seed(42)
 
-    checkpoint_path = args.ckpt_path
-    lmdb_path = args.dataset
-    max_samples = args.max_samples
-    config_path = args.config_path
-    hessian_method = args.hessian_method
-    redo = args.redo
+#     checkpoint_path = args.ckpt_path
+#     lmdb_path = args.dataset
+#     max_samples = args.max_samples
+#     config_path = args.config_path
+#     hessian_method = args.hessian_method
+#     redo = args.redo
 
-    df_results, aggregated_results = evaluate(
-        lmdb_path=lmdb_path,
-        checkpoint_path=checkpoint_path,
-        config_path=config_path,
-        hessian_method=hessian_method,
-        max_samples=max_samples,
-        redo=redo,
-    )
-
+#     df_results, aggregated_results = evaluate_hessian_on_horm_dataset(
+#         lmdb_path=lmdb_path,
+#         checkpoint_path=checkpoint_path,
+#         config_path=config_path,
+#         hessian_method=hessian_method,
+#         max_samples=max_samples,
+#         redo=redo,
+#     )

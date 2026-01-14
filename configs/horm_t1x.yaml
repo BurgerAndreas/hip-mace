@@ -37,8 +37,8 @@ predict_hessian: false # for HIP
 
 # ====== HIP / Hessian prediction ======
 hip: false
-hessian_feature_dim: 32
-hessian_use_last_layer_only: true
+hessian_feature_dim: 128
+hessian_use_last_layer_only: false
 hessian_r_max: 16.0
 hessian_edge_lmax: 3
 
@@ -81,7 +81,7 @@ weight_decay: 0.0000005
 amsgrad: true
 scheduler: ReduceLROnPlateau
 lr_factor: 0.8
-scheduler_patience: 50
+scheduler_patience: 100
 lr_scheduler_gamma: 0.9993
 swa: false
 ema: false

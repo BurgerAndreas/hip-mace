@@ -46,6 +46,25 @@ def _get_readout_input_dim(block: torch.nn.Module) -> int:
 
 @compile_mode("script")
 class MACELES(ScaleShiftMACE):
+    """MACE model with Latent Ewald Summation (LES) for long-range electrostatics.
+
+    LES (Latent Ewald Summation) is a method for handling long-range electrostatic
+    interactions in machine learning potentials through latent charge representations.
+    It enables accurate modeling of systems where electrostatic interactions play a
+    significant role, such as ionic materials and polar molecules.
+
+    This model can also compute BEC (Born Effective Charges), which are tensors that
+    describe the change in polarization with respect to atomic displacements. BECs
+    are important for predicting infrared spectra and dielectric properties of materials.
+
+    Args:
+        les_arguments: Optional dictionary of arguments for the LES module.
+            - use_atomwise: Whether to use atomwise LES (default: False)
+            - compute_bec: Whether to compute Born Effective Charges (default: False)
+            - bec_output_index: Index for BEC output (default: None)
+        **kwargs: Additional arguments passed to ScaleShiftMACE.
+    """
+
     def __init__(self, les_arguments: Optional[Dict] = None, **kwargs):
         super().__init__(**kwargs)
         try:

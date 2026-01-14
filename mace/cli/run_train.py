@@ -11,8 +11,10 @@ import logging
 import os
 from copy import deepcopy
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 import sys
+import wandb
+import numpy as np
 
 import torch.distributed
 from e3nn.util import jit
@@ -64,7 +66,6 @@ from mace.tools.scripts_utils import (
     get_swa,
     print_git_commit,
     remove_pt_head,
-    setup_wandb,
 )
 from mace.tools.tables_utils import create_error_table
 from mace.tools.utils import AtomicNumberTable
@@ -72,157 +73,201 @@ from mace.tools.utils import AtomicNumberTable
 # Store command line arguments as a string
 CMD_LINE_ARGS = " ".join(sys.argv)
 
-def main() -> None:
+def train_main() -> Dict[str, Any]:
     """
     This script runs the training/fine tuning for mace
     """
     args = tools.build_default_arg_parser().parse_args()
     args.override_dirname = CMD_LINE_ARGS
-    run(args)
+    args = run(args)
+    return args
 
+def get_train_val_datasets(args, heads, head_configs, model_foundation, z_table, device, rank, world_size):
+    # Load datasets for each head, supporting multiple files per head
+    valid_sets = {head: [] for head in heads}
+    train_sets = {head: [] for head in heads}
 
-def run(args) -> None:
-    """
-    This script runs the training/fine tuning for mace
-    """
-    # Set environment variable to allow weights_only=False in torch.load
-    os.environ["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] = "1"
-    
-    tag = tools.get_tag(name=args.name, seed=args.seed)
-    args, input_log_messages = tools.check_args(args)
+    for head_config in head_configs:
+        train_datasets = []
 
-    # default keyspec to update using heads dictionary
-    args.key_specification = KeySpecification()
-    update_keyspec_from_kwargs(args.key_specification, vars(args))
+        logging.info(f"Processing datasets for head '{head_config.head_name}'")
 
-    if args.device == "xpu":
-        try:
-            import intel_extension_for_pytorch as ipex
-            import oneccl_bindings_for_pytorch as oneccl  # pylint: disable=unused-import
-        except ImportError as e:
-            raise ImportError(
-                "Error: Intel extension for PyTorch not found, but XPU device was specified"
-            ) from e
-    rank, local_rank, world_size = init_distributed(args)
+        # Apply pseudolabels if this is the pt_head and pseudolabeling is enabled
+        if args.pseudolabel_replay and args.multiheads_finetuning and head_config.head_name == "pt_head":
+            logging.info("=============    Pseudolabeling for pt_head    ===========")
+            if apply_pseudolabels_to_pt_head_configs(
+                foundation_model=model_foundation,
+                pt_head_config=head_config,
+                r_max=args.r_max,
+                device=device,
+                batch_size=args.batch_size
+            ):
+                logging.info("Successfully applied pseudolabels to pt_head configurations")
+            else:
+                logging.warning("Pseudolabeling was not successful, continuing with original configurations")
 
-    # Setup
-    tools.set_seeds(args.seed)
-    tools.setup_logger(level=args.log_level, tag=tag, directory=args.log_dir, rank=rank)
-    logging.info("===========VERIFYING SETTINGS===========")
-    for message, loglevel in input_log_messages:
-        logging.log(level=loglevel, msg=message)
+        ase_files = [f for f in head_config.train_file if check_path_ase_read(f)]
+        non_ase_files = [f for f in head_config.train_file if not check_path_ase_read(f)]
 
-    if args.distributed:
-        if args.device == "cuda":
-            torch.cuda.set_device(local_rank)
-        elif args.device == "xpu":
-            torch.xpu.set_device(local_rank)
-        logging.info(f"Process group initialized: {torch.distributed.is_initialized()}")
-        logging.info(f"Processes: {world_size}")
-
-    try:
-        logging.info(f"MACE version: {mace.__version__}")
-    except AttributeError:
-        logging.info("Cannot find MACE version, please install MACE via pip")
-    logging.debug(f"Configuration: {args}")
-
-    tools.set_default_dtype(args.default_dtype)
-    device = tools.init_device(args.device)
-    commit = print_git_commit()
-    model_foundation: Optional[torch.nn.Module] = None
-    foundation_model_avg_num_neighbors = 0
-    # Filter out None from mace_mp_names to get valid model names
-    valid_mace_mp_models = [name for name in mace_mp_names if name is not None]
-    if args.foundation_model is not None:
-        if args.foundation_model in valid_mace_mp_models:
-            logging.info(
-                f"Using foundation model mace-mp-0 {args.foundation_model} as initial checkpoint."
+        if ase_files:
+            dataset = load_dataset_for_path(
+                file_path=ase_files,
+                r_max=args.r_max,
+                z_table=z_table,
+                head_config=head_config,
+                heads=heads,
+                collection=head_config.collections.train,
             )
-            calc = mace_mp(
-                model=args.foundation_model,
-                device=args.device,
-                default_dtype=args.default_dtype,
+            train_datasets.append(dataset)
+            logging.debug(f"Successfully loaded dataset from ASE files: {ase_files}")
+
+        for file in non_ase_files:
+            dataset = load_dataset_for_path(
+                file_path=file,
+                r_max=args.r_max,
+                z_table=z_table,
+                head_config=head_config,
+                heads=heads,
             )
-            model_foundation = calc.models[0]
-        elif args.foundation_model in ["small_off", "medium_off", "large_off"]:
-            model_type = args.foundation_model.split("_")[0]
-            logging.info(
-                f"Using foundation model mace-off-2023 {model_type} as initial checkpoint. ASL license."
-            )
-            calc = mace_off(
-                model=model_type,
-                device=args.device,
-                default_dtype=args.default_dtype,
-            )
-            model_foundation = calc.models[0]
-        else:
-            model_foundation = torch.load(
-                args.foundation_model, map_location=args.device
-            )
-            logging.info(
-                f"Using foundation model {args.foundation_model} as initial checkpoint."
-            )
-        args.r_max = model_foundation.r_max.item()
-        foundation_model_avg_num_neighbors = model_foundation.interactions[
-            0
-        ].avg_num_neighbors
-        if (
-            args.foundation_model not in ["small", "medium", "large"]
-            and args.pt_train_file is None
-        ):
-            logging.warning(
-                "Using multiheads finetuning with a foundation model that is not a Materials Project model, need to provied a path to a pretraining file with --pt_train_file."
-            )
-            args.multiheads_finetuning = False
-        if args.multiheads_finetuning:
-            assert (
-                args.E0s != "average"
-            ), "average atomic energies cannot be used for multiheads finetuning"
-            # check that the foundation model has a single head, if not, use the first head
-            if not args.force_mh_ft_lr:
-                logging.info(
-                    "Multihead finetuning mode, setting learning rate to 0.0001 and EMA to True. To use a different learning rate, set --force_mh_ft_lr=True."
+            train_datasets.append(dataset)
+            logging.debug(f"Successfully loaded dataset from non-ASE file: {file}")
+
+        if not train_datasets:
+            raise ValueError(f"No valid training datasets found for head {head_config.head_name}")
+
+        train_sets[head_config.head_name] = combine_datasets(train_datasets, head_config.head_name)
+
+        if head_config.valid_file:
+            valid_datasets = []
+
+            valid_ase_files = [f for f in head_config.valid_file if check_path_ase_read(f)]
+            valid_non_ase_files = [f for f in head_config.valid_file if not check_path_ase_read(f)]
+
+            if valid_ase_files:
+                valid_dataset = load_dataset_for_path(
+                    file_path=valid_ase_files,
+                    r_max=args.r_max,
+                    z_table=z_table,
+                    head_config=head_config,
+                    heads=heads,
+                    collection=head_config.collections.valid,
                 )
-                args.lr = 0.0001
-                args.ema = True
-                args.ema_decay = 0.99999
-            logging.info(
-                "Using multiheads finetuning mode, setting learning rate to 0.0001 and EMA to True"
-            )
-            if hasattr(model_foundation, "heads"):
-                if len(model_foundation.heads) > 1:
-                    logging.warning(
-                        "Mutlihead finetuning with models with more than one head is not supported, using the first head as foundation head."
-                    )
-                    model_foundation = remove_pt_head(
-                        model_foundation, args.foundation_head
-                    )
-    else:
-        args.multiheads_finetuning = False
+                valid_datasets.append(valid_dataset)
+                logging.debug(f"Successfully loaded validation dataset from ASE files: {valid_ase_files}")
+            for valid_file in valid_non_ase_files:
+                valid_dataset = load_dataset_for_path(
+                    file_path=valid_file,
+                    r_max=args.r_max,
+                    z_table=z_table,
+                    head_config=head_config,
+                    heads=heads,
+                )
+                valid_datasets.append(valid_dataset)
+                logging.debug(f"Successfully loaded validation dataset from {valid_file}")
 
-    if args.heads is not None:
-        args.heads = ast.literal_eval(args.heads)
-        for _, head_dict in args.heads.items():
-            # priority is global args < head property_key values < head info_keys+arrays_keys
-            head_keyspec = deepcopy(args.key_specification)
-            update_keyspec_from_kwargs(head_keyspec, head_dict)
-            head_keyspec.update(
-                info_keys=head_dict.get("info_keys", {}),
-                arrays_keys=head_dict.get("arrays_keys", {}),
-            )
-            head_dict["key_specification"] = head_keyspec
-    else:
-        args.heads = prepare_default_head(args)
-    if args.multiheads_finetuning:
-        pt_keyspec = (
-            args.heads["pt_head"]["key_specification"]
-            if "pt_head" in args.heads
-            else deepcopy(args.key_specification)
-        )
-        args.heads["pt_head"] = prepare_pt_head(
-            args, pt_keyspec, foundation_model_avg_num_neighbors
-        )
+            # Combine validation datasets
+            if valid_datasets:
+                valid_sets[head_config.head_name] = combine_datasets(valid_datasets, f"{head_config.head_name}_valid")
+                logging.info(f"Combined validation datasets for {head_config.head_name}")
 
+        # If no valid file is provided but collection exist, use the validation set from the collection
+        if head_config.valid_file is None and head_config.collections.valid:
+            valid_sets[head_config.head_name] = [
+                data.AtomicData.from_config(
+                    config, z_table=z_table, cutoff=args.r_max, heads=heads
+                )
+                for config in head_config.collections.valid
+            ]
+        if not valid_sets[head_config.head_name]:
+            raise ValueError(f"No valid datasets found for head {head_config.head_name}, please provide a valid_file or a valid_fraction")
+
+        # Create data loader for this head
+        train_dataset_head = train_sets[head_config.head_name]
+        if args.max_train_samples is not None:
+            max_train = min(args.max_train_samples, len(train_dataset_head))
+            if isinstance(train_dataset_head, list):
+                train_dataset_head = train_dataset_head[:max_train]
+            else:
+                train_dataset_head = torch.utils.data.Subset(
+                    train_dataset_head, range(max_train)
+                )
+            train_sets[head_config.head_name] = train_dataset_head
+        dataset_size = len(train_sets[head_config.head_name])
+        logging.info(f"Head '{head_config.head_name}' training dataset size: {dataset_size}")
+
+        train_loader_head = torch_geometric.dataloader.DataLoader(
+            dataset=train_sets[head_config.head_name],
+            batch_size=args.batch_size,
+            shuffle=True,
+            drop_last=(not args.lbfgs),
+            pin_memory=args.pin_memory,
+            num_workers=args.num_workers,
+            generator=torch.Generator().manual_seed(args.seed),
+        )
+        head_config.train_loader = train_loader_head
+
+    # concatenate all the trainsets
+    train_set = ConcatDataset([train_sets[head] for head in heads])
+    train_sampler, valid_sampler = None, None
+    if args.distributed:
+        train_sampler = torch.utils.data.distributed.DistributedSampler(
+            train_set,
+            num_replicas=world_size,
+            rank=rank,
+            shuffle=True,
+            drop_last=(not args.lbfgs),
+            seed=args.seed,
+        )
+        valid_samplers = {}
+        for head, valid_set in valid_sets.items():
+            valid_sampler = torch.utils.data.distributed.DistributedSampler(
+                valid_set,
+                num_replicas=world_size,
+                rank=rank,
+                shuffle=True,
+                drop_last=True,
+                seed=args.seed,
+            )
+            valid_samplers[head] = valid_sampler
+
+    train_loader = torch_geometric.dataloader.DataLoader(
+        dataset=train_set,
+        batch_size=args.batch_size,
+        sampler=train_sampler,
+        shuffle=(train_sampler is None),
+        drop_last=(train_sampler is None and not args.lbfgs),
+        pin_memory=args.pin_memory,
+        num_workers=args.num_workers,
+        generator=torch.Generator().manual_seed(args.seed),
+    )
+
+    valid_loaders = {heads[i]: None for i in range(len(heads))}
+    if not isinstance(valid_sets, dict):
+        valid_sets = {"Default": valid_sets}
+    for head, valid_set in valid_sets.items():
+        if args.max_valid_samples is not None:
+            max_valid = min(args.max_valid_samples, len(valid_set))
+            if isinstance(valid_set, list):
+                valid_set = valid_set[:max_valid]
+            else:
+                valid_set = torch.utils.data.Subset(valid_set, range(max_valid))
+        valid_loaders[head] = torch_geometric.dataloader.DataLoader(
+            dataset=valid_set,
+            batch_size=args.valid_batch_size,
+            sampler=valid_samplers[head] if args.distributed else None,
+            shuffle=False,
+            drop_last=False,
+            pin_memory=args.pin_memory,
+            num_workers=args.num_workers,
+            generator=torch.Generator().manual_seed(args.seed),
+        )
+    
+    return train_loader, train_sampler, train_set, valid_loaders
+
+def setup_input_data(args, device, tag, model_foundation=None, rank=0, world_size=1):
+    """
+    Setup input data for training and validation.
+    """
     logging.info("===========LOADING INPUT DATA===========")
     heads = list(args.heads.keys())
     logging.info(f"Using heads: {heads}")
@@ -520,184 +565,169 @@ def run(args) -> None:
             except KeyError as e:
                 raise KeyError(f"Atomic number {e} not found in atomic_energies_dict for head {head_config.head_name}, add E0s for this atomic number") from e
 
-    # Load datasets for each head, supporting multiple files per head
-    valid_sets = {head: [] for head in heads}
-    train_sets = {head: [] for head in heads}
-
-    for head_config in head_configs:
-        train_datasets = []
-
-        logging.info(f"Processing datasets for head '{head_config.head_name}'")
-
-        # Apply pseudolabels if this is the pt_head and pseudolabeling is enabled
-        if args.pseudolabel_replay and args.multiheads_finetuning and head_config.head_name == "pt_head":
-            logging.info("=============    Pseudolabeling for pt_head    ===========")
-            if apply_pseudolabels_to_pt_head_configs(
-                foundation_model=model_foundation,
-                pt_head_config=head_config,
-                r_max=args.r_max,
-                device=device,
-                batch_size=args.batch_size
-            ):
-                logging.info("Successfully applied pseudolabels to pt_head configurations")
-            else:
-                logging.warning("Pseudolabeling was not successful, continuing with original configurations")
-
-        ase_files = [f for f in head_config.train_file if check_path_ase_read(f)]
-        non_ase_files = [f for f in head_config.train_file if not check_path_ase_read(f)]
-
-        if ase_files:
-            dataset = load_dataset_for_path(
-                file_path=ase_files,
-                r_max=args.r_max,
-                z_table=z_table,
-                head_config=head_config,
-                heads=heads,
-                collection=head_config.collections.train,
-            )
-            train_datasets.append(dataset)
-            logging.debug(f"Successfully loaded dataset from ASE files: {ase_files}")
-
-        for file in non_ase_files:
-            dataset = load_dataset_for_path(
-                file_path=file,
-                r_max=args.r_max,
-                z_table=z_table,
-                head_config=head_config,
-                heads=heads,
-            )
-            train_datasets.append(dataset)
-            logging.debug(f"Successfully loaded dataset from non-ASE file: {file}")
-
-        if not train_datasets:
-            raise ValueError(f"No valid training datasets found for head {head_config.head_name}")
-
-        train_sets[head_config.head_name] = combine_datasets(train_datasets, head_config.head_name)
-
-        if head_config.valid_file:
-            valid_datasets = []
-
-            valid_ase_files = [f for f in head_config.valid_file if check_path_ase_read(f)]
-            valid_non_ase_files = [f for f in head_config.valid_file if not check_path_ase_read(f)]
-
-            if valid_ase_files:
-                valid_dataset = load_dataset_for_path(
-                    file_path=valid_ase_files,
-                    r_max=args.r_max,
-                    z_table=z_table,
-                    head_config=head_config,
-                    heads=heads,
-                    collection=head_config.collections.valid,
-                )
-                valid_datasets.append(valid_dataset)
-                logging.debug(f"Successfully loaded validation dataset from ASE files: {valid_ase_files}")
-            for valid_file in valid_non_ase_files:
-                valid_dataset = load_dataset_for_path(
-                    file_path=valid_file,
-                    r_max=args.r_max,
-                    z_table=z_table,
-                    head_config=head_config,
-                    heads=heads,
-                )
-                valid_datasets.append(valid_dataset)
-                logging.debug(f"Successfully loaded validation dataset from {valid_file}")
-
-            # Combine validation datasets
-            if valid_datasets:
-                valid_sets[head_config.head_name] = combine_datasets(valid_datasets, f"{head_config.head_name}_valid")
-                logging.info(f"Combined validation datasets for {head_config.head_name}")
-
-        # If no valid file is provided but collection exist, use the validation set from the collection
-        if head_config.valid_file is None and head_config.collections.valid:
-            valid_sets[head_config.head_name] = [
-                data.AtomicData.from_config(
-                    config, z_table=z_table, cutoff=args.r_max, heads=heads
-                )
-                for config in head_config.collections.valid
-            ]
-        if not valid_sets[head_config.head_name]:
-            raise ValueError(f"No valid datasets found for head {head_config.head_name}, please provide a valid_file or a valid_fraction")
-
-        # Create data loader for this head
-        train_dataset_head = train_sets[head_config.head_name]
-        if args.max_train_samples is not None:
-            max_train = min(args.max_train_samples, len(train_dataset_head))
-            if isinstance(train_dataset_head, list):
-                train_dataset_head = train_dataset_head[:max_train]
-            else:
-                train_dataset_head = torch.utils.data.Subset(
-                    train_dataset_head, range(max_train)
-                )
-            train_sets[head_config.head_name] = train_dataset_head
-        dataset_size = len(train_sets[head_config.head_name])
-        logging.info(f"Head '{head_config.head_name}' training dataset size: {dataset_size}")
-
-        train_loader_head = torch_geometric.dataloader.DataLoader(
-            dataset=train_sets[head_config.head_name],
-            batch_size=args.batch_size,
-            shuffle=True,
-            drop_last=(not args.lbfgs),
-            pin_memory=args.pin_memory,
-            num_workers=args.num_workers,
-            generator=torch.Generator().manual_seed(args.seed),
-        )
-        head_config.train_loader = train_loader_head
-
-    # concatenate all the trainsets
-    train_set = ConcatDataset([train_sets[head] for head in heads])
-    train_sampler, valid_sampler = None, None
-    if args.distributed:
-        train_sampler = torch.utils.data.distributed.DistributedSampler(
-            train_set,
-            num_replicas=world_size,
-            rank=rank,
-            shuffle=True,
-            drop_last=(not args.lbfgs),
-            seed=args.seed,
-        )
-        valid_samplers = {}
-        for head, valid_set in valid_sets.items():
-            valid_sampler = torch.utils.data.distributed.DistributedSampler(
-                valid_set,
-                num_replicas=world_size,
-                rank=rank,
-                shuffle=True,
-                drop_last=True,
-                seed=args.seed,
-            )
-            valid_samplers[head] = valid_sampler
-
-    train_loader = torch_geometric.dataloader.DataLoader(
-        dataset=train_set,
-        batch_size=args.batch_size,
-        sampler=train_sampler,
-        shuffle=(train_sampler is None),
-        drop_last=(train_sampler is None and not args.lbfgs),
-        pin_memory=args.pin_memory,
-        num_workers=args.num_workers,
-        generator=torch.Generator().manual_seed(args.seed),
+    train_loader, train_sampler, train_set, valid_loaders = get_train_val_datasets(
+        args=args, 
+        heads=heads, 
+        head_configs=head_configs, 
+        model_foundation=model_foundation, 
+        z_table=z_table, 
+        device=device, 
+        rank=rank, 
+        world_size=world_size   
     )
 
-    valid_loaders = {heads[i]: None for i in range(len(heads))}
-    if not isinstance(valid_sets, dict):
-        valid_sets = {"Default": valid_sets}
-    for head, valid_set in valid_sets.items():
-        if args.max_valid_samples is not None:
-            max_valid = min(args.max_valid_samples, len(valid_set))
-            if isinstance(valid_set, list):
-                valid_set = valid_set[:max_valid]
-            else:
-                valid_set = torch.utils.data.Subset(valid_set, range(max_valid))
-        valid_loaders[head] = torch_geometric.dataloader.DataLoader(
-            dataset=valid_set,
-            batch_size=args.valid_batch_size,
-            sampler=valid_samplers[head] if args.distributed else None,
-            shuffle=False,
-            drop_last=False,
-            pin_memory=args.pin_memory,
-            num_workers=args.num_workers,
-            generator=torch.Generator().manual_seed(args.seed),
+    return train_loader, train_sampler, train_set, valid_loaders, atomic_energies, z_table, head_configs, heads, dipole_only
+
+def run(args) -> Dict[str, Any]:
+    """
+    This script runs the training/fine tuning for mace
+    """
+    # Set environment variable to allow weights_only=False in torch.load
+    os.environ["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] = "1"
+    
+    tag = tools.get_tag(name=args.name, seed=args.seed)
+    args, input_log_messages = tools.check_args(args)
+
+    # default keyspec to update using heads dictionary
+    args.key_specification = KeySpecification()
+    update_keyspec_from_kwargs(args.key_specification, vars(args))
+
+    if args.device == "xpu":
+        try:
+            import intel_extension_for_pytorch as ipex
+            import oneccl_bindings_for_pytorch as oneccl  # pylint: disable=unused-import
+        except ImportError as e:
+            raise ImportError(
+                "Error: Intel extension for PyTorch not found, but XPU device was specified"
+            ) from e
+    rank, local_rank, world_size = init_distributed(args)
+
+    # Setup
+    tools.set_seeds(args.seed)
+    tools.setup_logger(level=args.log_level, tag=tag, directory=args.log_dir, rank=rank)
+    logging.info("===========VERIFYING SETTINGS===========")
+    for message, loglevel in input_log_messages:
+        logging.log(level=loglevel, msg=message)
+
+    if args.distributed:
+        if args.device == "cuda":
+            torch.cuda.set_device(local_rank)
+        elif args.device == "xpu":
+            torch.xpu.set_device(local_rank)
+        logging.info(f"Process group initialized: {torch.distributed.is_initialized()}")
+        logging.info(f"Processes: {world_size}")
+
+    try:
+        logging.info(f"MACE version: {mace.__version__}")
+    except AttributeError:
+        logging.info("Cannot find MACE version, please install MACE via pip")
+    logging.debug(f"Configuration: {args}")
+
+    tools.set_default_dtype(args.default_dtype)
+    device = tools.init_device(args.device)
+    commit = print_git_commit()
+    model_foundation: Optional[torch.nn.Module] = None
+    foundation_model_avg_num_neighbors = 0
+    # Filter out None from mace_mp_names to get valid model names
+    valid_mace_mp_models = [name for name in mace_mp_names if name is not None]
+    if args.foundation_model is not None:
+        if args.foundation_model in valid_mace_mp_models:
+            logging.info(
+                f"Using foundation model mace-mp-0 {args.foundation_model} as initial checkpoint."
+            )
+            calc = mace_mp(
+                model=args.foundation_model,
+                device=args.device,
+                default_dtype=args.default_dtype,
+            )
+            model_foundation = calc.models[0]
+        elif args.foundation_model in ["small_off", "medium_off", "large_off"]:
+            model_type = args.foundation_model.split("_")[0]
+            logging.info(
+                f"Using foundation model mace-off-2023 {model_type} as initial checkpoint. ASL license."
+            )
+            calc = mace_off(
+                model=model_type,
+                device=args.device,
+                default_dtype=args.default_dtype,
+            )
+            model_foundation = calc.models[0]
+        else:
+            model_foundation = torch.load(
+                args.foundation_model, map_location=args.device
+            )
+            logging.info(
+                f"Using foundation model {args.foundation_model} as initial checkpoint."
+            )
+        args.r_max = model_foundation.r_max.item()
+        foundation_model_avg_num_neighbors = model_foundation.interactions[
+            0
+        ].avg_num_neighbors
+        if (
+            args.foundation_model not in ["small", "medium", "large"]
+            and args.pt_train_file is None
+        ):
+            logging.warning(
+                "Using multiheads finetuning with a foundation model that is not a Materials Project model, need to provied a path to a pretraining file with --pt_train_file."
+            )
+            args.multiheads_finetuning = False
+        if args.multiheads_finetuning:
+            assert (
+                args.E0s != "average"
+            ), "average atomic energies cannot be used for multiheads finetuning"
+            # check that the foundation model has a single head, if not, use the first head
+            if not args.force_mh_ft_lr:
+                logging.info(
+                    "Multihead finetuning mode, setting learning rate to 0.0001 and EMA to True. To use a different learning rate, set --force_mh_ft_lr=True."
+                )
+                args.lr = 0.0001
+                args.ema = True
+                args.ema_decay = 0.99999
+            logging.info(
+                "Using multiheads finetuning mode, setting learning rate to 0.0001 and EMA to True"
+            )
+            if hasattr(model_foundation, "heads"):
+                if len(model_foundation.heads) > 1:
+                    logging.warning(
+                        "Mutlihead finetuning with models with more than one head is not supported, using the first head as foundation head."
+                    )
+                    model_foundation = remove_pt_head(
+                        model_foundation, args.foundation_head
+                    )
+    else:
+        args.multiheads_finetuning = False
+
+    if args.heads is not None:
+        args.heads = ast.literal_eval(args.heads)
+        for _, head_dict in args.heads.items():
+            # priority is global args < head property_key values < head info_keys+arrays_keys
+            head_keyspec = deepcopy(args.key_specification)
+            update_keyspec_from_kwargs(head_keyspec, head_dict)
+            head_keyspec.update(
+                info_keys=head_dict.get("info_keys", {}),
+                arrays_keys=head_dict.get("arrays_keys", {}),
+            )
+            head_dict["key_specification"] = head_keyspec
+    else:
+        args.heads = prepare_default_head(args)
+    if args.multiheads_finetuning:
+        pt_keyspec = (
+            args.heads["pt_head"]["key_specification"]
+            if "pt_head" in args.heads
+            else deepcopy(args.key_specification)
         )
+        args.heads["pt_head"] = prepare_pt_head(
+            args, pt_keyspec, foundation_model_avg_num_neighbors
+        )
+
+    train_loader, train_sampler, train_set, valid_loaders, atomic_energies, z_table, head_configs, heads, dipole_only = setup_input_data(
+        args=args, 
+        device=device,
+        tag=tag,
+        model_foundation=model_foundation, 
+        rank=rank, 
+        world_size=world_size
+    )
 
     loss_fn = get_loss_fn(args, dipole_only, args.compute_dipole)
     args.avg_num_neighbors = get_avg_num_neighbors(head_configs, args, train_loader, device)
@@ -806,7 +836,42 @@ def run(args) -> None:
                 start_epoch = opt_start_epoch
 
     if args.wandb:
-        setup_wandb(args)
+        logging.info("Using Weights and Biases for logging")
+
+        wandb_config = {}
+        args_dict = vars(args)
+
+        for key, value in args_dict.items():
+            if isinstance(value, np.ndarray):
+                args_dict[key] = value.tolist()
+
+        class CustomEncoder(json.JSONEncoder):
+            def default(self, o):
+                if isinstance(o, KeySpecification):
+                    return o.__dict__
+                return super().default(o)
+
+        args_dict_json = json.dumps(args_dict, cls=CustomEncoder)
+        if args.wandb_log_hypers is None:
+            # log all hyperparameters
+            wandb_config = args_dict
+        else:
+            for key in args.wandb_log_hypers:
+                wandb_config[key] = args_dict[key]
+        wandb.init(
+            project=args.wandb_project,
+            entity=args.wandb_entity,
+            name=args.wandb_name,
+            config=wandb_config,
+            dir=args.wandb_dir,
+            resume="allow",
+        )
+        wandb.run.summary["params"] = args_dict_json
+        # write the wandb run id to file
+        with open(os.path.join(args.checkpoints_dir, "wandb_run_id.txt"), "w") as f:
+            f.write(wandb.run.id)
+        args.wandb_run_id = wandb.run.id
+            
     if args.distributed:
         distributed_model = DDP(model, device_ids=[local_rank])
     else:
@@ -1088,7 +1153,10 @@ def run(args) -> None:
     logging.info("Done")
     if args.distributed:
         torch.distributed.destroy_process_group()
+    if args.wandb:
+        wandb.finish()
+    return args
 
 
 if __name__ == "__main__":
-    main()
+    train_main()

@@ -781,7 +781,7 @@ def get_params_options(
         ],
         lr=args.lr,
         amsgrad=args.amsgrad,
-        betas=(args.beta, args.beta),
+        betas=(args.beta, args.beta2),
     )
     if hasattr(model, "joint_embedding") and model.joint_embedding is not None:
         param_options["params"].append(
@@ -827,44 +827,6 @@ def get_optimizer(
     else:
         optimizer = torch.optim.Adam(**param_options)
     return optimizer
-
-
-def setup_wandb(args: argparse.Namespace):
-    logging.info("Using Weights and Biases for logging")
-    import wandb
-
-    wandb_config = {}
-    args_dict = vars(args)
-
-    for key, value in args_dict.items():
-        if isinstance(value, np.ndarray):
-            args_dict[key] = value.tolist()
-
-    class CustomEncoder(json.JSONEncoder):
-        def default(self, o):
-            if isinstance(o, KeySpecification):
-                return o.__dict__
-            return super().default(o)
-
-    args_dict_json = json.dumps(args_dict, cls=CustomEncoder)
-    if args.wandb_log_hypers is None:
-        # log all hyperparameters
-        wandb_config = args_dict
-    else:
-        for key in args.wandb_log_hypers:
-            wandb_config[key] = args_dict[key]
-    wandb.init(
-        project=args.wandb_project,
-        entity=args.wandb_entity,
-        name=args.wandb_name,
-        config=wandb_config,
-        dir=args.wandb_dir,
-        resume="allow",
-    )
-    wandb.run.summary["params"] = args_dict_json
-    # write the wandb run id to file
-    with open(os.path.join(args.checkpoints_dir, "wandb_run_id.txt"), "w") as f:
-        f.write(wandb.run.id)
 
 
 def get_files_with_suffix(dir_path: str, suffix: str) -> List[str]:
