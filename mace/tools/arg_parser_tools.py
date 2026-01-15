@@ -37,6 +37,17 @@ def check_args(args):
     if args.downloads_dir is None:
         args.downloads_dir = os.path.join(args.work_dir, "downloads")
     
+    # HIP
+    if args.hip:
+        args.predict_hessian = True
+    if args.predict_hessian:
+        args.hip = True
+    if args.hip:
+        if args.error_table not in ["TotalMAEHessian"]:
+            args.error_table = "TotalMAEHessian"
+        if args.loss not in ["l1l2l1energyforceshessian"]:
+            args.loss = "l1l2l1energyforceshessian"
+    
     # Store command line arguments as a string
     CMD_LINE_ARGS = " ".join(sys.argv)
     if not args.wandb_name or args.wandb_name == "":
