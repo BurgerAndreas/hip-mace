@@ -8,7 +8,7 @@ from typing import Any, Callable, Dict, List, Optional, Type, Union
 
 import numpy as np
 import torch
-from e3nn import o3
+from e3nn import nn, o3
 from e3nn.util.jit import compile_mode
 
 from mace.modules.embeddings import GenericJointEmbedding
@@ -87,10 +87,14 @@ class MACE(torch.nn.Module):
         hessian_r_max: float = 16.0,
         hessian_edge_lmax: int = 3, # 2 or 3
         hessian_use_radial: bool = True,  # Use radial embeddings
-        hessian_use_both_nodes: bool = True,  # Use both h_i and h_j
+        hessian_use_both_nodes: bool = True,  # Use both h_i and h_j (False = only h_j)
         hessian_aggregation: str = "learnable",  # "mean", "learnable"
         hessian_edge_feature_method: str = "edge_tp",  # "edge_tp" or "message_passing"
         hessian_message_passing_layer: Optional[int] = None,  # Which interaction layer to use (None = last)
+        hessian_use_directional_encoding: bool = False,  # Include normalized edge vector r_ij in tensor product
+        hessian_separate_radial_network: bool = False,  # Use dedicated radial MLP for Hessian (not shared with energy)
+        hessian_radial_MLP: Optional[List[int]] = None,  # Radial MLP architecture for separate network
+        hessian_use_edge_gates: bool = False,  # Add equivariant gating on off-diagonal features
     ):
         super().__init__()
         self.register_buffer(
@@ -341,12 +345,32 @@ class MACE(torch.nn.Module):
             self.hessian_aggregation = hessian_aggregation
             self.hessian_edge_feature_method = hessian_edge_feature_method
             self.hessian_message_passing_layer = hessian_message_passing_layer
+            self.hessian_use_directional_encoding = hessian_use_directional_encoding
+            self.hessian_separate_radial_network = hessian_separate_radial_network
+            self.hessian_use_edge_gates = hessian_use_edge_gates
             
             # Validate hessian_edge_feature_method
             assert hessian_edge_feature_method in ["edge_tp", "message_passing"], \
                 f"hessian_edge_feature_method must be 'edge_tp' or 'message_passing', got {hessian_edge_feature_method}"
             
+            # Separate radial network for Hessian (if enabled)
+            if hessian_separate_radial_network:
+                if hessian_radial_MLP is None:
+                    hessian_radial_MLP = [64, 64, 64]
+                self.hessian_radial_embedding = RadialEmbeddingBlock(
+                    r_max=hessian_r_max,
+                    num_bessel=num_bessel,
+                    num_polynomial_cutoff=num_polynomial_cutoff,
+                    radial_type=radial_type,
+                    distance_transform=distance_transform,
+                    apply_cutoff=apply_cutoff,
+                )
+                hessian_radial_dim = self.hessian_radial_embedding.out_dim
+            else:
+                hessian_radial_dim = self.radial_embedding.out_dim
+            
             # If using both nodes, need to combine h_i and h_j
+            # When False, we only use h_j (drop h_i entirely)
             if hessian_use_both_nodes:
                 # Combine two node features: h_i and h_j -> combined features
                 # Options: concatenate and project, or add and project
@@ -361,7 +385,7 @@ class MACE(torch.nn.Module):
                 # Radial features are scalar (0e), so we can use them to gate/modulate
                 # the edge features. Create a projection from radial features to modulate
                 # the tensor product output.
-                radial_irreps = o3.Irreps(f"{self.radial_embedding.out_dim}x0e")
+                radial_irreps = o3.Irreps(f"{hessian_radial_dim}x0e")
                 # Project radial features to match hessian_out_irreps for gating
                 self.hessian_radial_proj = o3.Linear(
                     irreps_in=radial_irreps,
@@ -369,11 +393,49 @@ class MACE(torch.nn.Module):
                 )
             
             # Tensor product: node features x spherical harmonics -> hessian features
-            self.edge_tp = o3.FullyConnectedTensorProduct(
-                irreps_in1=hidden_irreps,
-                irreps_in2=sh_irreps, 
-                irreps_out=hessian_out_irreps
-            )
+            # If using directional encoding, we'll need to handle r_ij separately
+            if hessian_use_directional_encoding:
+                # For directional encoding: TP(h_j, Y_ij, r_ij) where r_ij is normalized vector
+                # Convert normalized Cartesian vector r_ij to spherical harmonics (1o)
+                # Then combine Y_ij and r_ij first, then with h_j
+                r_ij_sh_irreps = o3.Irreps("1x1o")  # Normalized direction vector as spherical harmonics
+                self.hessian_r_ij_spherical_harmonics = o3.SphericalHarmonics(
+                    r_ij_sh_irreps, normalize=True, normalization="component"
+                )
+                # Combine Y_ij and r_ij first, then with h_j
+                combined_edge_irreps = (sh_irreps * r_ij_sh_irreps).sort()[0].simplify()
+                self.edge_tp_directional = o3.FullyConnectedTensorProduct(
+                    irreps_in1=sh_irreps,
+                    irreps_in2=r_ij_sh_irreps,
+                    irreps_out=combined_edge_irreps
+                )
+                self.edge_tp = o3.FullyConnectedTensorProduct(
+                    irreps_in1=hidden_irreps,
+                    irreps_in2=combined_edge_irreps,
+                    irreps_out=hessian_out_irreps
+                )
+            else:
+                self.edge_tp = o3.FullyConnectedTensorProduct(
+                    irreps_in1=hidden_irreps,
+                    irreps_in2=sh_irreps, 
+                    irreps_out=hessian_out_irreps
+                )
+            
+            # Edge-level gates for non-linearity on off-diagonal features
+            if hessian_use_edge_gates:
+                # Create equivariant gating on off-diagonal features
+                irreps_scalars = o3.Irreps(
+                    [(mul, ir) for mul, ir in hessian_out_irreps if ir.l == 0]
+                )
+                irreps_gated = o3.Irreps([(mul, ir) for mul, ir in hessian_out_irreps if ir.l > 0])
+                irreps_gates = o3.Irreps([mul, "0e"] for mul, _ in irreps_gated)
+                self.hessian_edge_gate = nn.Gate(
+                    irreps_scalars=irreps_scalars,
+                    act_scalars=[torch.nn.functional.silu for _ in irreps_scalars],
+                    irreps_gates=irreps_gates,
+                    act_gates=[torch.nn.functional.sigmoid] * len(irreps_gates),
+                    irreps_gated=irreps_gated,
+                )
             
             # Learnable layer aggregation weights (if using learnable aggregation)
             if hessian_aggregation == "learnable":
@@ -394,11 +456,14 @@ class MACE(torch.nn.Module):
                 # Create a specialized interaction block for Hessian edge features
                 # Use the same interaction class as the main model
                 # Configure it specifically for Hessian edge feature extraction
-                hessian_edge_feats_irreps = o3.Irreps(f"{self.radial_embedding.out_dim}x0e")
+                hessian_edge_feats_irreps = o3.Irreps(f"{hessian_radial_dim}x0e")
                 
                 # Compute interaction irreps for Hessian: sh_irreps * hidden_irreps
                 num_features = hidden_irreps.count(o3.Irrep(0, 1))
                 hessian_interaction_irreps = (sh_irreps * num_features).sort()[0].simplify()
+                
+                # Use separate radial MLP if specified
+                hessian_radial_MLP_for_interaction = hessian_radial_MLP if hessian_separate_radial_network else radial_MLP
                 
                 # Create the Hessian-specific interaction block
                 self.hessian_interaction = interaction_cls(
@@ -410,7 +475,7 @@ class MACE(torch.nn.Module):
                     hidden_irreps=hidden_irreps,
                     avg_num_neighbors=avg_num_neighbors,
                     edge_irreps=edge_irreps,
-                    radial_MLP=radial_MLP,
+                    radial_MLP=hessian_radial_MLP_for_interaction,
                     cueq_config=cueq_config,
                     oeq_config=oeq_config,
                 )
@@ -672,11 +737,31 @@ class MACE(torch.nn.Module):
             edge_lengths_hessian = edge_distance_hessian
             if edge_lengths_hessian.dim() == 1:
                 edge_lengths_hessian = edge_lengths_hessian.unsqueeze(-1)
-            edge_feats_hessian, _ = self.radial_embedding(
-                edge_lengths_hessian,
-                data["node_attrs"],
-                edge_index_hessian,
-                self.atomic_numbers
+            # Use separate radial network if enabled, otherwise use shared one
+            if self.hessian_separate_radial_network:
+                edge_feats_hessian, _ = self.hessian_radial_embedding(
+                    edge_lengths_hessian,
+                    data["node_attrs"],
+                    edge_index_hessian,
+                    self.atomic_numbers
+                )
+            else:
+                edge_feats_hessian, _ = self.radial_embedding(
+                    edge_lengths_hessian,
+                    data["node_attrs"],
+                    edge_index_hessian,
+                    self.atomic_numbers
+                )
+        
+        # Normalized edge vectors for directional encoding (if enabled)
+        edge_vec_normalized_sh = None
+        if self.hessian_use_directional_encoding:
+            # Normalize edge_distance_vec_hessian to get r_ij
+            edge_vec_norm = torch.norm(edge_distance_vec_hessian, dim=-1, keepdim=True)
+            edge_vec_normalized = edge_distance_vec_hessian / (edge_vec_norm + 1e-8)
+            # Convert normalized Cartesian vector to spherical harmonics (1o)
+            edge_vec_normalized_sh = self.hessian_r_ij_spherical_harmonics(
+                edge_vec_normalized.to(node_feats_list[0].dtype)
             )
         
         # Make l=0,1,2 node and edge features for the Hessian
@@ -710,6 +795,10 @@ class MACE(torch.nn.Module):
                     
                     # Project raw messages to hessian output irreps
                     off_diag_feats = self.hessian_message_proj(raw_messages)
+                    
+                    # Apply edge-level gates for non-linearity (if enabled)
+                    if self.hessian_use_edge_gates:
+                        off_diag_feats = self.hessian_edge_gate(off_diag_feats)
                 else:
                     # Use tensor product approach (edge_tp)
                     # j->i convention
@@ -717,18 +806,34 @@ class MACE(torch.nn.Module):
                     h_j = node_feats[j] # [E, C]
                     
                     # Use both source and target node features if enabled
+                    # When False, drop h_i entirely and use only h_j (symmetry enforced later)
                     if self.hessian_use_both_nodes:
                         h_i = node_feats[i_idx] # [E, C]
                         # Combine h_i and h_j: add and project
                         h_combined = self.hessian_node_combine(h_i + h_j)
                     else:
+                        # Only use h_j, drop h_i entirely
                         h_combined = h_j
                     
-                    # Compute tensor product: TP(h_combined, Y_ij) -> produces 0e, 1e, 2e
-                    off_diag_feats = self.edge_tp(
-                        h_combined, 
-                        edge_attrs_hessian, # [E, L]
-                    )
+                    # Compute tensor product with optional directional encoding
+                    if self.hessian_use_directional_encoding:
+                        # Include normalized edge direction r_ij explicitly
+                        # First combine Y_ij and r_ij, then with h_j
+                        combined_edge_attrs = self.edge_tp_directional(
+                            edge_attrs_hessian,  # [E, L] - Y_ij
+                            edge_vec_normalized_sh,  # [E, 3] - r_ij as spherical harmonics (1o)
+                        )
+                        # Then combine h_j with the enhanced edge features
+                        off_diag_feats = self.edge_tp(
+                            h_combined,
+                            combined_edge_attrs,  # [E, L'] - enhanced edge features
+                        )
+                    else:
+                        # Standard tensor product: TP(h_combined, Y_ij) -> produces 0e, 1e, 2e
+                        off_diag_feats = self.edge_tp(
+                            h_combined, 
+                            edge_attrs_hessian, # [E, L]
+                        )
                 
                 # Incorporate radial features if enabled (only for edge_tp method)
                 if self.hessian_edge_feature_method == "edge_tp" and self.hessian_use_radial:
@@ -736,6 +841,10 @@ class MACE(torch.nn.Module):
                     radial_proj = self.hessian_radial_proj(edge_feats_hessian)
                     # Element-wise multiplication (gating) with radial features
                     off_diag_feats = off_diag_feats * (1.0 + radial_proj)
+                
+                # Apply edge-level gates for non-linearity (if enabled)
+                if self.hessian_use_edge_gates:
+                    off_diag_feats = self.hessian_edge_gate(off_diag_feats)
                 
                 diag_feats_list.append(diag_feats)
                 off_diag_feats_list.append(off_diag_feats)
