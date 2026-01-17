@@ -333,10 +333,10 @@ class MACE(torch.nn.Module):
             # Input 2: Edge Geometry (Spherical Harmonics usually up to L=2 or 3)
             # We assume edge_attrs are standard Spherical Harmonics (0e + 1o + 2e + ...)
             # lmax=2 is sufficient, but lmax=3 adds a parity-correct path $1o \otimes 3o \to 2e$
-            sh_irreps = o3.Irreps.spherical_harmonics(lmax=hessian_edge_lmax) 
+            sh_irreps_hessian = o3.Irreps.spherical_harmonics(lmax=hessian_edge_lmax) 
             
             self.hessian_spherical_harmonics = o3.SphericalHarmonics(
-                sh_irreps, normalize=True, normalization="component"
+                sh_irreps_hessian, normalize=True, normalization="component"
             )
             
             # Store flags for feature computation
@@ -403,9 +403,9 @@ class MACE(torch.nn.Module):
                     r_ij_sh_irreps, normalize=True, normalization="component"
                 )
                 # Combine Y_ij and r_ij first, then with h_j
-                combined_edge_irreps = (sh_irreps * r_ij_sh_irreps).sort()[0].simplify()
+                combined_edge_irreps = (sh_irreps_hessian * r_ij_sh_irreps).sort()[0].simplify()
                 self.edge_tp_directional = o3.FullyConnectedTensorProduct(
-                    irreps_in1=sh_irreps,
+                    irreps_in1=sh_irreps_hessian,
                     irreps_in2=r_ij_sh_irreps,
                     irreps_out=combined_edge_irreps
                 )
@@ -417,7 +417,7 @@ class MACE(torch.nn.Module):
             else:
                 self.edge_tp = o3.FullyConnectedTensorProduct(
                     irreps_in1=hidden_irreps,
-                    irreps_in2=sh_irreps, 
+                    irreps_in2=sh_irreps_hessian, 
                     irreps_out=hessian_out_irreps
                 )
             
@@ -428,7 +428,7 @@ class MACE(torch.nn.Module):
                     [(mul, ir) for mul, ir in hessian_out_irreps if ir.l == 0]
                 )
                 irreps_gated = o3.Irreps([(mul, ir) for mul, ir in hessian_out_irreps if ir.l > 0])
-                irreps_gates = o3.Irreps([mul, "0e"] for mul, _ in irreps_gated)
+                irreps_gates = o3.Irreps([(mul, "0e") for mul, _ in irreps_gated])
                 self.hessian_edge_gate = nn.Gate(
                     irreps_scalars=irreps_scalars,
                     act_scalars=[torch.nn.functional.silu for _ in irreps_scalars],
@@ -458,20 +458,23 @@ class MACE(torch.nn.Module):
                 # Configure it specifically for Hessian edge feature extraction
                 hessian_edge_feats_irreps = o3.Irreps(f"{hessian_radial_dim}x0e")
                 
-                # Compute interaction irreps for Hessian: sh_irreps * hidden_irreps
-                num_features = hidden_irreps.count(o3.Irrep(0, 1))
-                hessian_interaction_irreps = (sh_irreps * num_features).sort()[0].simplify()
+                # # Compute interaction irreps for Hessian: sh_irreps * hidden_irreps
+                # num_features = hidden_irreps.count(o3.Irrep(0, 1))
+                # hessian_interaction_irreps = (sh_irreps_hessian * num_features).sort()[0].simplify()
                 
                 # Use separate radial MLP if specified
                 hessian_radial_MLP_for_interaction = hessian_radial_MLP if hessian_separate_radial_network else radial_MLP
                 
                 # Create the Hessian-specific interaction block
+                # The target_irreps should match what we want to project to hessian_out_irreps
+                # Use hidden_irreps as target to maintain compatibility with the projection layer
+                print(f"Interaction block: {interaction_cls.__name__}")
                 self.hessian_interaction = interaction_cls(
                     node_attrs_irreps=node_attr_irreps,
                     node_feats_irreps=hidden_irreps,
-                    edge_attrs_irreps=sh_irreps,
+                    edge_attrs_irreps=sh_irreps_hessian,
                     edge_feats_irreps=hessian_edge_feats_irreps,
-                    target_irreps=hessian_interaction_irreps,
+                    target_irreps=hidden_irreps,  # Changed from hessian_interaction_irreps to hidden_irreps
                     hidden_irreps=hidden_irreps,
                     avg_num_neighbors=avg_num_neighbors,
                     edge_irreps=edge_irreps,
@@ -480,9 +483,9 @@ class MACE(torch.nn.Module):
                     oeq_config=oeq_config,
                 )
                 
-                # Create projection layer from interaction irreps to hessian_out_irreps
+                # Create projection layer from hidden_irreps to hessian_out_irreps
                 self.hessian_message_proj = o3.Linear(
-                    irreps_in=hessian_interaction_irreps,
+                    irreps_in=hidden_irreps,  # Changed from hessian_interaction_irreps to hidden_irreps
                     irreps_out=hessian_out_irreps
                 )
 
@@ -792,6 +795,11 @@ class MACE(torch.nn.Module):
                         edge_index=edge_index_hessian,
                         cutoff=None,  # Cutoff already applied in radial embedding if needed
                     )
+                    # [n_edges, irreps_mid]
+                    
+                    # Apply the interaction's linear layer to transform irreps_mid -> hidden_irreps
+                    # raw_messages: [n_edges, irreps_mid] -> [n_edges, hidden_irreps]
+                    raw_messages = self.hessian_interaction.linear(raw_messages)
                     
                     # Project raw messages to hessian output irreps
                     off_diag_feats = self.hessian_message_proj(raw_messages)
