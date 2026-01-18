@@ -253,7 +253,7 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         "--num_interactions", help="number of interactions", type=int, default=2
     )
 
-    # HIP / Hessian prediction options
+    # HIP / Hessian prediction options (match to models.py lines 83–97)
     parser.add_argument(
         "--hip",
         help="Enable HIP Hessian prediction (internal flag)",
@@ -264,32 +264,19 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         "--hessian_feature_dim",
         help="Number of feature channels per L for Hessian projection",
         type=int,
-        default=32,
+        default=64,
     )
     parser.add_argument(
         "--hessian_use_last_layer_only",
         help="Use only last layer features for Hessian prediction",
         type=str2bool,
-        default=True,
+        default=False,
     )
     parser.add_argument(
         "--hessian_r_max",
         help="Cutoff radius for Hessian graph (Angstrom)",
         type=float,
         default=16.0,
-    )
-    parser.add_argument(
-        "--hessian_edge_feature_method",
-        help='Method for Hessian edge features: "edge_tp" or "message_passing"',
-        type=str,
-        default="edge_tp",
-        choices=["edge_tp", "message_passing"],
-    )
-    parser.add_argument(
-        "--hessian_message_passing_layer",
-        help="Which interaction layer to use for Hessian MP features (None = last)",
-        type=lambda x: int(x) if x.lower() != "none" else None,
-        default=None,
     )
     parser.add_argument(
         "--hessian_edge_lmax",
@@ -305,17 +292,55 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--hessian_use_both_nodes",
-        help="Use both source and target node features (h_i and h_j) for Hessian edge features",
+        help="Use both h_i and h_j for Hessian edge features (False=only h_j)",
         type=str2bool,
         default=True,
     )
     parser.add_argument(
         "--hessian_aggregation",
-        help="Aggregation method for combining layer features: 'mean' or 'learnable'",
+        help="Aggregation method for combining layer features: 'mean', 'learnable'",
         type=str,
         default="learnable",
         choices=["mean", "learnable"],
     )
+    parser.add_argument(
+        "--hessian_edge_feature_method",
+        help='Method for Hessian edge features: "edge_tp", "message_passing"',
+        type=str,
+        default="message_passing",
+        choices=["edge_tp", "message_passing"],
+    )
+    parser.add_argument(
+        "--hessian_message_passing_layer",
+        help="Which interaction layer to use for Hessian MP features (None=last)",
+        type=lambda x: int(x) if isinstance(x, str) and x.lower() != "none" else None,
+        default=None,
+    )
+    parser.add_argument(
+        "--hessian_use_directional_encoding",
+        help="Include normalized edge vector r_ij in Hessian edge tensor product",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
+        "--hessian_separate_radial_network",
+        help="Use a separate radial network (MLP) for Hessian (not shared with energy)",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
+        "--hessian_radial_MLP",
+        help="Radial MLP architecture for Hessian (as Python list, e.g. '[64,64,64]')",
+        type=str,
+        default=None,
+    )
+    parser.add_argument(
+        "--hessian_use_edge_gates",
+        help="Add equivariant gating on off-diagonal features in HIP Hessian",
+        type=str2bool,
+        default=False,
+    )
+
     parser.add_argument(
         "--MLP_irreps",
         help="hidden irreps of the MLP in last readout",
@@ -1026,7 +1051,6 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=False,
     )
     # options for using Weights and Biases for experiment tracking
-    # to install see https://wandb.ai
     parser.add_argument(
         "--wandb",
         help="Use Weights and Biases for experiment tracking",

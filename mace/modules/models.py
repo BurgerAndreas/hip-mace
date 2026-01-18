@@ -83,13 +83,13 @@ class MACE(torch.nn.Module):
         # Added for HIP Hessian prediction
         hip: bool = False,
         hessian_feature_dim: int = 32,
-        hessian_use_last_layer_only: bool = True,
+        hessian_use_last_layer_only: bool = False,
         hessian_r_max: float = 16.0,
         hessian_edge_lmax: int = 3, # 2 or 3
         hessian_use_radial: bool = True,  # Use radial embeddings
         hessian_use_both_nodes: bool = True,  # Use both h_i and h_j (False = only h_j)
         hessian_aggregation: str = "learnable",  # "mean", "learnable"
-        hessian_edge_feature_method: str = "edge_tp",  # "edge_tp" or "message_passing"
+        hessian_edge_feature_method: str = "message_passing",  # "edge_tp" or "message_passing"
         hessian_message_passing_layer: Optional[int] = None,  # Which interaction layer to use (None = last)
         hessian_use_directional_encoding: bool = False,  # Include normalized edge vector r_ij in tensor product
         hessian_separate_radial_network: bool = False,  # Use dedicated radial MLP for Hessian (not shared with energy)
