@@ -35,6 +35,7 @@ dependencies = [
     "kagglehub",
     "einops",
     "wandb",
+    "muon-optimizer @ git+https://github.com/KellerJordan/Muon",
 ]
 
 # Make isort compatible with black

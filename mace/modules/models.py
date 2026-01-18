@@ -900,6 +900,30 @@ class MACE(torch.nn.Module):
 
         return hessian
 
+    def get_muon_param_groups(
+        self,
+        **kwargs,
+    ):
+        """
+        Build parameter groups for MuonWithAuxAdam:
+        - Muon group (use_muon=True): only parameters with ndim >= 2 inside hidden layers
+          `blocks`.
+        - Aux Adam group (use_muon=False): every other parameter in the model
+          (embeddings, heads, biases/gains, blocks, etc.).
+
+        Returns two param-group lists.
+        """
+        muon_params = []
+        adam_params = []
+
+        for name, param in self.named_parameters():
+            if name.startswith("interactions.") and param.ndim >= 2:
+                muon_params.append(param)
+            else:
+                adam_params.append(param)
+
+        return muon_params, adam_params
+
 @compile_mode("script")
 class ScaleShiftMACE(MACE):
     def __init__(

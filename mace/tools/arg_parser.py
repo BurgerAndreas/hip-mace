@@ -865,7 +865,7 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         help="Optimizer for parameter optimization",
         type=str,
         default="adam",
-        choices=["adam", "adamw", "schedulefree"],
+        choices=["adam", "adamw", "schedulefree", "muon"],
     )
     parser.add_argument(
         "--beta",
@@ -896,6 +896,24 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--weight_decay", help="weight decay (L2 penalty)", type=float, default=5e-7
+    )
+    parser.add_argument(
+        "--lr_muon",
+        help="Learning rate for muon optimizer (hidden weights)",
+        type=float,
+        default=0.02,
+    )
+    parser.add_argument(
+        "--weight_decay_muon",
+        help="weight decay for muon optimizer (hidden weights)",
+        type=float,
+        default=0.01,
+    )
+    parser.add_argument(
+        "--eps",
+        help="epsilon parameter for optimizer",
+        type=float,
+        default=1e-12,
     )
     parser.add_argument(
         "--amsgrad",

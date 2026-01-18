@@ -769,7 +769,7 @@ def run(args) -> Dict[str, Any]:
     # Optimizer
     param_options = get_params_options(args, model)
     optimizer: torch.optim.Optimizer
-    optimizer = get_optimizer(args, param_options)
+    optimizer = get_optimizer(args, param_options, model=model)
     if args.device == "xpu":
         logging.info("Optimzing model and optimzier for XPU")
         model, optimizer = ipex.optimize(model, optimizer=optimizer)

@@ -812,7 +812,7 @@ def get_params_options(
 
 
 def get_optimizer(
-    args: argparse.Namespace, param_options: Dict[str, Any]
+    args: argparse.Namespace, param_options: Dict[str, Any], model: Optional[torch.nn.Module] = None
 ) -> torch.optim.Optimizer:
     if args.optimizer == "adamw":
         optimizer = torch.optim.AdamW(**param_options)
@@ -825,6 +825,41 @@ def get_optimizer(
             ) from exc
         _param_options = {k: v for k, v in param_options.items() if k != "amsgrad"}
         optimizer = adamw_schedulefree.AdamWScheduleFree(**_param_options)
+    elif args.optimizer == "muon":
+        if model is None:
+            raise ValueError("Model must be provided when using muon optimizer")
+        if not hasattr(model, "get_muon_param_groups"):
+            raise ValueError("Model must have get_muon_param_groups method for muon optimizer")
+        from muon import MuonWithAuxAdam
+        
+        muon_params, adam_params = model.get_muon_param_groups(**param_options)
+        
+        param_groups = [
+            dict(
+                params=muon_params,
+                use_muon=True,
+                lr=getattr(args, "lr_muon", 0.02),
+                weight_decay=getattr(args, "weight_decay_muon", 0.01),
+            ),
+            dict(
+                params=adam_params,
+                use_muon=False,
+                lr=getattr(args, "lr", 0.0005),
+                betas=(getattr(args, "beta", 0.9), getattr(args, "beta2", 0.999)),
+                eps=getattr(args, "eps", 1e-12),
+                weight_decay=getattr(args, "weight_decay", 0.01),
+            ),
+        ]
+        
+        num_muon_params = np.sum([p.numel() for p in muon_params])
+        num_adam_params = np.sum([p.numel() for p in adam_params])
+        logging.info(f"Number of muon parameters: {num_muon_params}")
+        logging.info(f"Number of adam parameters: {num_adam_params}")
+        logging.info(
+            f"Percentage of muon parameters: {num_muon_params / (num_muon_params + num_adam_params) * 100:.2f}%"
+        )
+        
+        optimizer = MuonWithAuxAdam(param_groups)
     else:
         optimizer = torch.optim.Adam(**param_options)
     return optimizer
