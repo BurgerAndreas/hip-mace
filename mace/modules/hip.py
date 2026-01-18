@@ -16,28 +16,30 @@ except ImportError as e:
     generate_graph = None
     print(f"Warning: importing ocp_graph_utils failed: {e}. Using slower loop without torch_geometric and torch_cluster to build the Hessian graph.")
 
+# Cache for Wigner 3j matrices keyed by (dtype, device)
+_wigner_cache = {}
+
+def _get_wigner_3j_cached(l1: int, l2: int, l3: int, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+    """Get cached Wigner 3j matrix, computing and caching if not present."""
+    key = (l1, l2, l3, dtype, device)
+    if key not in _wigner_cache:
+        _wigner_cache[key] = o3.wigner_3j(l1, l2, l3, dtype=dtype, device=device)
+    return _wigner_cache[key]
+
 def irreps_to_cartesian_matrix(irreps: torch.Tensor) -> torch.Tensor:
     """
     irreps: torch.Tensor [N, 9] or [E, 9]
     Returns:
         torch.Tensor [N, 3, 3] or [E, 3, 3]
     """
+    dtype, device = irreps.dtype, irreps.device
+    w0 = _get_wigner_3j_cached(1, 1, 0, dtype, device)
+    w1 = _get_wigner_3j_cached(1, 1, 1, dtype, device)
+    w2 = _get_wigner_3j_cached(1, 1, 2, dtype, device)
     return (
-        einops.einsum(
-            o3.wigner_3j(1, 1, 0, dtype=irreps.dtype, device=irreps.device),
-            irreps[..., :1],
-            "m1 m2 m3, b m3 -> b m1 m2",
-        )
-        + einops.einsum(
-            o3.wigner_3j(1, 1, 1, dtype=irreps.dtype, device=irreps.device),
-            irreps[..., 1:4],
-            "m1 m2 m3, b m3 -> b m1 m2",
-        )
-        + einops.einsum(
-            o3.wigner_3j(1, 1, 2, dtype=irreps.dtype, device=irreps.device),
-            irreps[..., 4:9],
-            "m1 m2 m3, b m3 -> b m1 m2",
-        )
+        einops.einsum(w0, irreps[..., :1], "m1 m2 m3, b m3 -> b m1 m2")
+        + einops.einsum(w1, irreps[..., 1:4], "m1 m2 m3, b m3 -> b m1 m2")
+        + einops.einsum(w2, irreps[..., 4:9], "m1 m2 m3, b m3 -> b m1 m2")
     )
 
 
