@@ -62,8 +62,23 @@ def evaluate_hessian_on_horm_dataset(
         raise ValueError(f"Multiple .model files found in {args.checkpoints_dir}: {model_files}")
     checkpoint_path = model_files[0]
     
-    torch_tools.set_default_dtype(args.default_dtype)
     device = torch_tools.init_device(args.device)
+
+    # Check bfloat16 support if requested
+    if args.default_dtype == "bfloat16":
+        if not torch_tools.check_bfloat16_support(device):
+            if device.type == "cuda":
+                capability = torch.cuda.get_device_capability(device)
+                print(
+                    f"WARNING: GPU compute capability {capability[0]}.{capability[1]} does not fully support bfloat16. "
+                    f"Evaluation may produce incorrect results. Consider using float32 instead."
+                )
+            else:
+                print(f"WARNING: Device {device} may not fully support bfloat16.")
+        else:
+            print(f"Device {device} supports bfloat16 evaluation")
+
+    torch_tools.set_default_dtype(args.default_dtype)
 
     # Load model
     model = torch.load(f=checkpoint_path, map_location=args.device)

@@ -77,11 +77,40 @@ def init_device(device_str: str) -> torch.device:
     return torch.device("cpu")
 
 
-dtype_dict = {"float32": torch.float32, "float64": torch.float64}
+dtype_dict = {"float32": torch.float32, "float64": torch.float64, "bfloat16": torch.bfloat16, "float16": torch.float16}
 
 
 def set_default_dtype(dtype: str) -> None:
     torch.set_default_dtype(dtype_dict[dtype])
+
+
+def check_bfloat16_support(device: torch.device) -> bool:
+    """
+    Check if the device supports bfloat16 training.
+
+    Args:
+        device: torch device to check
+
+    Returns:
+        True if bfloat16 is supported, False otherwise
+    """
+    if device.type == "cuda":
+        # Check CUDA compute capability (bf16 requires >= 8.0, e.g., Ampere or newer)
+        if torch.cuda.is_available():
+            capability = torch.cuda.get_device_capability(device)
+            # Ampere (A100, RTX 30xx) and newer support bf16
+            # Compute capability 8.0 and above
+            return capability[0] >= 8
+    elif device.type == "cpu":
+        # CPUs support bfloat16 through software emulation, but it's slow
+        return True
+    elif device.type == "xpu":
+        # Intel XPU (e.g., Data Center GPU Max) supports bfloat16
+        return True
+    elif device.type == "mps":
+        # Apple Metal Performance Shaders support bfloat16 on M1/M2/M3
+        return True
+    return False
 
 
 def get_change_of_basis() -> torch.Tensor:

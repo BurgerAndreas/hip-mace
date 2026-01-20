@@ -12,7 +12,7 @@ downloads_dir: null
 
 # ====== Device and logging ======
 device: cuda
-default_dtype: float32
+default_dtype: bfloat16 # float32
 distributed: false
 launcher: slurm
 log_level: INFO

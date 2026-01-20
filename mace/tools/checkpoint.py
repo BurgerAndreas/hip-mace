@@ -22,16 +22,20 @@ class CheckpointState:
     model: torch.nn.Module
     optimizer: torch.optim.Optimizer
     lr_scheduler: torch.optim.lr_scheduler.ExponentialLR
+    scaler: Optional[torch.cuda.amp.GradScaler] = None
 
 
 class CheckpointBuilder:
     @staticmethod
     def create_checkpoint(state: CheckpointState) -> Checkpoint:
-        return {
+        checkpoint = {
             "model": state.model.state_dict(),
             "optimizer": state.optimizer.state_dict(),
             "lr_scheduler": state.lr_scheduler.state_dict(),
         }
+        if state.scaler is not None:
+            checkpoint["scaler"] = state.scaler.state_dict()
+        return checkpoint
 
     @staticmethod
     def load_checkpoint(
@@ -40,6 +44,18 @@ class CheckpointBuilder:
         state.model.load_state_dict(checkpoint["model"], strict=strict)  # type: ignore
         state.optimizer.load_state_dict(checkpoint["optimizer"])
         state.lr_scheduler.load_state_dict(checkpoint["lr_scheduler"])
+
+        # Load scaler state if present in checkpoint and state has a scaler
+        if "scaler" in checkpoint:
+            if state.scaler is not None:
+                try:
+                    state.scaler.load_state_dict(checkpoint["scaler"])
+                except Exception as e:
+                    logging.warning(f"Failed to load scaler state: {e}")
+            else:
+                logging.warning("Checkpoint has scaler state but current training does not use AMP")
+        elif state.scaler is not None:
+            logging.info("Starting AMP training from checkpoint without scaler state")
 
 
 @dataclasses.dataclass

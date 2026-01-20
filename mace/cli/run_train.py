@@ -623,8 +623,100 @@ def run(args) -> Dict[str, Any]:
         logging.info("Cannot find MACE version, please install MACE via pip")
     logging.debug(f"Configuration: {args}")
 
-    tools.set_default_dtype(args.default_dtype)
+    # Initialize device first
     device = tools.init_device(args.device)
+
+    # Check bfloat16 support if requested
+    if args.default_dtype == "bfloat16":
+        if tools.check_bfloat16_support(device):
+            if args.distributed:
+                # In distributed mode, check all GPUs
+                if device.type == "cuda":
+                    all_support_bf16 = True
+                    for i in range(torch.cuda.device_count()):
+                        gpu_device = torch.device(f"cuda:{i}")
+                        if not tools.check_bfloat16_support(gpu_device):
+                            capability = torch.cuda.get_device_capability(gpu_device)
+                            logging.warning(
+                                f"GPU {i} (compute capability {capability[0]}.{capability[1]}) "
+                                f"does not support bfloat16. Consider using float32 instead."
+                            )
+                            all_support_bf16 = False
+                    if all_support_bf16:
+                        logging.info(f"All {torch.cuda.device_count()} GPUs support bfloat16 training")
+                else:
+                    logging.info(f"Device {device} supports bfloat16 training")
+            else:
+                capability = torch.cuda.get_device_capability(device) if device.type == "cuda" else None
+                if capability:
+                    logging.info(f"GPU compute capability {capability[0]}.{capability[1]} supports bfloat16 training")
+                else:
+                    logging.info(f"Device {device} supports bfloat16 training")
+        else:
+            if device.type == "cuda":
+                capability = torch.cuda.get_device_capability(device)
+                logging.warning(
+                    f"GPU compute capability {capability[0]}.{capability[1]} does not fully support bfloat16. "
+                    f"Training may be slow or unstable. Consider using float32 instead, or upgrading to "
+                    f"an Ampere GPU (compute capability >= 8.0) such as A100, RTX 30xx series, or newer."
+                )
+            else:
+                logging.warning(
+                    f"Device {device} may not fully support bfloat16. Training could be slow."
+                )
+
+    tools.set_default_dtype(args.default_dtype)
+
+    # AMP Configuration
+    amp_enabled = False
+    amp_dtype = torch.float32
+    scaler = None
+
+    # Auto-detect AMP if not explicitly set
+    if args.amp is None:
+        args.amp = args.default_dtype in ["bfloat16", "float16"]
+
+    if args.amp:
+        # Determine AMP dtype (auto-detection or explicit)
+        if args.amp_dtype == "auto":
+            amp_dtype = torch.bfloat16 if args.default_dtype == "bfloat16" else torch.float16
+        else:
+            amp_dtype = torch.bfloat16 if args.amp_dtype == "bfloat16" else torch.float16
+
+        # Validate GPU support for bfloat16
+        if amp_dtype == torch.bfloat16 and device.type == "cuda":
+            if not tools.check_bfloat16_support(device):
+                logging.warning(
+                    "GPU lacks native bfloat16 support (requires compute capability >= 8.0). "
+                    "Falling back to float16 AMP."
+                )
+                amp_dtype = torch.float16
+
+        # Disable AMP for CPU (performance degradation)
+        if device.type == "cpu":
+            logging.warning("AMP is not recommended on CPU. Disabling AMP.")
+            args.amp = False
+        else:
+            amp_enabled = True
+
+            # Create GradScaler only for float16 (bfloat16 doesn't need scaling)
+            if amp_dtype == torch.float16:
+                scaler = torch.cuda.amp.GradScaler()
+                logging.info("AMP enabled with float16 and gradient scaling")
+            else:
+                logging.info("AMP enabled with bfloat16 (no gradient scaling)")
+
+    # Disable AMP for LBFGS optimizer
+    if args.optimizer == "lbfgs" and amp_enabled:
+        logging.warning(
+            "LBFGS optimizer does not support AMP gradient scaling. "
+            "Disabling AMP and using float32."
+        )
+        amp_enabled = False
+        scaler = None
+        args.default_dtype = "float32"
+        tools.set_default_dtype("float32")
+
     commit = print_git_commit()
     model_foundation: Optional[torch.nn.Module] = None
     foundation_model_avg_num_neighbors = 0
@@ -797,14 +889,14 @@ def run(args) -> Dict[str, Any]:
     if args.restart_latest:
         try:
             opt_start_epoch = checkpoint_handler.load_latest(
-                state=tools.CheckpointState(model, optimizer, lr_scheduler),
+                state=tools.CheckpointState(model, optimizer, lr_scheduler, scaler),
                 swa=True,
                 device=device,
             )
         except Exception:  # pylint: disable=W0703
             try:
                 opt_start_epoch = checkpoint_handler.load_latest(
-                    state=tools.CheckpointState(model, optimizer, lr_scheduler),
+                    state=tools.CheckpointState(model, optimizer, lr_scheduler, scaler),
                     swa=False,
                     device=device,
                 )
@@ -828,7 +920,7 @@ def run(args) -> Dict[str, Any]:
                           line_search_fn="strong_wolfe")
         if restart_lbfgs:
             opt_start_epoch = checkpoint_handler.load_latest(
-                state=tools.CheckpointState(model, optimizer, lr_scheduler),
+                state=tools.CheckpointState(model, optimizer, lr_scheduler, scaler),
                 swa=False,
                 device=device,
             )
@@ -946,6 +1038,9 @@ def run(args) -> Dict[str, Any]:
         train_sampler=train_sampler,
         rank=rank,
         samples_per_epoch=args.samples_per_epoch,
+        scaler=scaler,
+        amp_enabled=amp_enabled,
+        amp_dtype=amp_dtype,
     )
 
     logging.info("")
@@ -1024,7 +1119,7 @@ def run(args) -> Dict[str, Any]:
 
     for swa_eval in swas:
         epoch = checkpoint_handler.load_latest(
-            state=tools.CheckpointState(model, optimizer, lr_scheduler),
+            state=tools.CheckpointState(model, optimizer, lr_scheduler, scaler),
             swa=swa_eval,
             device=device,
         )

@@ -72,8 +72,21 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         "--default_dtype",
         help="set default dtype",
         type=str,
-        choices=["float32", "float64"],
+        choices=["float32", "float64", "bfloat16", "float16"],
         default="float64",
+    )
+    parser.add_argument(
+        "--amp",
+        help="Enable Automatic Mixed Precision training (auto-enabled for bfloat16/float16)",
+        type=str2bool,
+        default=None,
+    )
+    parser.add_argument(
+        "--amp_dtype",
+        help="AMP dtype (auto, bfloat16, or float16). Auto uses default_dtype if bf16/fp16.",
+        type=str,
+        choices=["auto", "bfloat16", "float16"],
+        default="auto",
     )
     parser.add_argument(
         "--distributed",

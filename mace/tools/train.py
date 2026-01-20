@@ -194,6 +194,9 @@ def train(
     train_sampler: Optional[DistributedSampler] = None,
     rank: Optional[int] = 0,
     samples_per_epoch: Optional[int] = None,
+    scaler: Optional[torch.cuda.amp.GradScaler] = None,
+    amp_enabled: bool = False,
+    amp_dtype: torch.dtype = torch.float32,
 ):
     lowest_loss = np.inf
     valid_loss = np.inf
@@ -235,6 +238,8 @@ def train(
             data_loader=valid_loader,
             output_args=output_args,
             device=device,
+            amp_enabled=amp_enabled,
+            amp_dtype=amp_dtype,
         )
         valid_err_log(
             valid_loss_head, eval_metrics, logger, log_errors, None, valid_loader_name
@@ -280,6 +285,9 @@ def train(
             distributed_model=distributed_model,
             rank=rank,
             samples_per_epoch=samples_per_epoch,
+            scaler=scaler,
+            amp_enabled=amp_enabled,
+            amp_dtype=amp_dtype,
         )
         epoch_time = time.time() - epoch_start_time
         if distributed:
@@ -323,6 +331,8 @@ def train(
                         data_loader=valid_loader,
                         output_args=output_args,
                         device=device,
+                        amp_enabled=amp_enabled,
+                        amp_dtype=amp_dtype,
                     )
                     if rank == 0:
                         valid_err_log(
@@ -420,6 +430,9 @@ def train_one_epoch(
     distributed_model: Optional[DistributedDataParallel] = None,
     rank: Optional[int] = 0,
     samples_per_epoch: Optional[int] = None,
+    scaler: Optional[torch.cuda.amp.GradScaler] = None,
+    amp_enabled: bool = False,
+    amp_dtype: torch.dtype = torch.float32,
 ) -> float:
     model_to_train = model if distributed_model is None else distributed_model
 
@@ -460,6 +473,9 @@ def train_one_epoch(
                 output_args=output_args,
                 max_grad_norm=max_grad_norm,
                 device=device,
+                scaler=scaler,
+                amp_enabled=amp_enabled,
+                amp_dtype=amp_dtype,
             )
             batch_size = getattr(batch, "num_graphs", 1)
             total_loss += float(loss) * batch_size
@@ -483,6 +499,9 @@ def take_step(
     output_args: Dict[str, bool],
     max_grad_norm: Optional[float],
     device: torch.device,
+    scaler: Optional[torch.cuda.amp.GradScaler] = None,
+    amp_enabled: bool = False,
+    amp_dtype: torch.dtype = torch.float32,
 ) -> Tuple[float, Dict[str, Any]]:
     start_time = time.time()
     batch = batch.to(device)
@@ -490,23 +509,41 @@ def take_step(
 
     def closure():
         optimizer.zero_grad(set_to_none=True)
-        output = model(
-            batch_dict,
-            training=True,
-            compute_force=output_args["forces"],
-            compute_virials=output_args["virials"],
-            compute_stress=output_args["stress"],
-            predict_hessian=output_args["hip"]
-        )
-        loss = loss_fn(pred=output, ref=batch)
-        loss.backward()
+
+        # Wrap forward + loss in autocast
+        with torch.cuda.amp.autocast(enabled=amp_enabled, dtype=amp_dtype):
+            output = model(
+                batch_dict,
+                training=True,
+                compute_force=output_args["forces"],
+                compute_virials=output_args["virials"],
+                compute_stress=output_args["stress"],
+                predict_hessian=output_args["hip"]
+            )
+            loss = loss_fn(pred=output, ref=batch)
+
+        # Backward with scaling (if fp16)
+        if scaler is not None:
+            scaler.scale(loss).backward()
+        else:
+            loss.backward()
+
+        # Gradient clipping (unscale first if fp16)
         if max_grad_norm is not None:
+            if scaler is not None:
+                scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_grad_norm)
 
         return loss
 
     loss = closure()
-    optimizer.step()
+
+    # Optimizer step with scaling (if fp16)
+    if scaler is not None:
+        scaler.step(optimizer)
+        scaler.update()
+    else:
+        optimizer.step()
 
     if ema is not None:
         ema.update()
@@ -623,6 +660,8 @@ def evaluate(
     data_loader: DataLoader,
     output_args: Dict[str, bool],
     device: torch.device,
+    amp_enabled: bool = False,
+    amp_dtype: torch.dtype = torch.float32,
 ) -> Tuple[float, Dict[str, Any]]:
     for param in model.parameters():
         param.requires_grad = False
@@ -633,14 +672,18 @@ def evaluate(
     for batch in data_loader:
         batch = batch.to(device)
         batch_dict = batch.to_dict()
-        output = model(
-            batch_dict,
-            training=False,
-            compute_force=output_args["forces"],
-            compute_virials=output_args["virials"],
-            compute_stress=output_args["stress"],
-            predict_hessian=output_args["hip"],
-        )
+
+        # Wrap forward in autocast (no gradient scaling needed for inference)
+        with torch.cuda.amp.autocast(enabled=amp_enabled, dtype=amp_dtype):
+            output = model(
+                batch_dict,
+                training=False,
+                compute_force=output_args["forces"],
+                compute_virials=output_args["virials"],
+                compute_stress=output_args["stress"],
+                predict_hessian=output_args["hip"],
+            )
+
         avg_loss, aux = metrics(batch, output)
 
     avg_loss, aux = metrics.compute()
