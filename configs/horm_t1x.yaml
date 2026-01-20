@@ -43,7 +43,7 @@ train_file: ~/.cache/kagglehub/datasets/yunhonghan/hessian-dataset-for-optimizin
 valid_file: ~/.cache/kagglehub/datasets/yunhonghan/hessian-dataset-for-optimizing-reactive-mliphorm/versions/5/ts1x-val.h5
 valid_fraction: 0.1 # only used when no explicit validation file is given
 max_valid_samples: 2000
-samples_per_epoch: 50000 # stop the epoch early after this many samples
+samples_per_epoch: 20000 # stop the epoch early after this many samples
 test_file: null
 test_dir: null
 num_workers: 0
@@ -76,14 +76,14 @@ weight_decay: 5e-7
 amsgrad: true
 scheduler: ReduceLROnPlateau
 lr_factor: 0.8
-scheduler_patience: 5
+scheduler_patience: 2
 lr_scheduler_gamma: 0.9993
 warmup_epochs: 100
 min_lr: 0.0001
 swa: false # stochastic weight averaging
 ema: false # exponential moving average
 ema_decay: 0.99
-max_num_epochs: 100
+max_num_epochs: 200
 patience: 2048
 eval_interval: 1
 
