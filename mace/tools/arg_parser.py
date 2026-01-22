@@ -433,7 +433,7 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         "--predict_hessian",
         help="Select True to predict Hessian with HIP",
         type=str2bool,
-        default=True,
+        default=False,
     )
     parser.add_argument(
         "--compute_polarizability",
