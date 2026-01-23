@@ -550,7 +550,7 @@ def take_step(
 
     loss = loss.detach().cpu()
     loss_dict = {
-        "loss": loss.numpy(),
+        "loss": to_numpy(loss),
         "time": time.time() - start_time,
     }
 

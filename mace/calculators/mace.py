@@ -473,16 +473,16 @@ class MACECalculator(Calculator):
             )
             self.results["free_energy"] = self.results["energy"]
             self.results["node_energy"] = (
-                torch.mean(ret_tensors["node_energy"], dim=0).cpu().numpy()
+                torch_tools.to_numpy(torch.mean(ret_tensors["node_energy"], dim=0))
             )
             self.results["forces"] = (
-                torch.mean(ret_tensors["forces"], dim=0).cpu().numpy()
+                torch_tools.to_numpy(torch.mean(ret_tensors["forces"], dim=0))
                 * self.energy_units_to_eV
                 / self.length_units_to_A
             )
             if self.num_models > 1:
                 self.results["energies"] = (
-                    ret_tensors["energies"].cpu().numpy() * self.energy_units_to_eV
+                    torch_tools.to_numpy(ret_tensors["energies"]) * self.energy_units_to_eV
                 )
                 self.results["energy_var"] = (
                     torch.var(ret_tensors["energies"], dim=0, unbiased=False)
@@ -491,37 +491,31 @@ class MACECalculator(Calculator):
                     * self.energy_units_to_eV
                 )
                 self.results["forces_comm"] = (
-                    ret_tensors["forces"].cpu().numpy()
+                    torch_tools.to_numpy(ret_tensors["forces"])
                     * self.energy_units_to_eV
                     / self.length_units_to_A
                 )
             if out["stress"] is not None:
                 self.results["stress"] = full_3x3_to_voigt_6_stress(
-                    torch.mean(ret_tensors["stress"], dim=0).cpu().numpy()
+                    torch_tools.to_numpy(torch.mean(ret_tensors["stress"], dim=0))
                     * self.energy_units_to_eV
                     / self.length_units_to_A**3
                 )
                 if self.num_models > 1:
                     self.results["stress_var"] = full_3x3_to_voigt_6_stress(
-                        torch.var(ret_tensors["stress"], dim=0, unbiased=False)
-                        .cpu()
-                        .numpy()
+                        torch_tools.to_numpy(torch.var(ret_tensors["stress"], dim=0, unbiased=False))
                         * self.energy_units_to_eV
                         / self.length_units_to_A**3
                     )
             if "atomic_stresses" in ret_tensors:
                 self.results["stresses"] = (
-                    torch.mean(torch.stack(ret_tensors["atomic_stresses"]), dim=0)
-                    .cpu()
-                    .numpy()
+                    torch_tools.to_numpy(torch.mean(torch.stack(ret_tensors["atomic_stresses"]), dim=0))
                     * self.energy_units_to_eV
                     / self.length_units_to_A**3
                 )
             if "atomic_virials" in ret_tensors:
                 self.results["virials"] = (
-                    torch.mean(torch.stack(ret_tensors["atomic_virials"]), dim=0)
-                    .cpu()
-                    .numpy()
+                    torch_tools.to_numpy(torch.mean(torch.stack(ret_tensors["atomic_virials"]), dim=0))
                     * self.energy_units_to_eV
                 )
         if self.model_type in [
@@ -530,25 +524,23 @@ class MACECalculator(Calculator):
             "DipolePolarizabilityMACE",
         ]:
             self.results["dipole"] = (
-                torch.mean(ret_tensors["dipole"], dim=0).cpu().numpy()
+                torch_tools.to_numpy(torch.mean(ret_tensors["dipole"], dim=0))
             )
             if self.num_models > 1:
                 self.results["dipole_var"] = (
-                    torch.var(ret_tensors["dipole"], dim=0, unbiased=False)
-                    .cpu()
-                    .numpy()
+                    torch_tools.to_numpy(torch.var(ret_tensors["dipole"], dim=0, unbiased=False))
                 )
         if self.model_type in [
             "DipolePolarizabilityMACE",
         ]:
             self.results["charges"] = (
-                torch.mean(ret_tensors["charges"], dim=0).cpu().numpy()
+                torch_tools.to_numpy(torch.mean(ret_tensors["charges"], dim=0))
             )
             self.results["polarizability"] = (
-                torch.mean(ret_tensors["polarizability"], dim=0).cpu().numpy()
+                torch_tools.to_numpy(torch.mean(ret_tensors["polarizability"], dim=0))
             )
             self.results["polarizability_sh"] = (
-                torch.mean(ret_tensors["polarizability_sh"], dim=0).cpu().numpy()
+                torch_tools.to_numpy(torch.mean(ret_tensors["polarizability_sh"], dim=0))
             )
 
     def get_dielectric_derivatives(self, atoms=None):
@@ -570,11 +562,11 @@ class MACECalculator(Calculator):
             for model in self.models
         ]
         dipole_derivatives = [
-            output["dmu_dr"].clone().detach().cpu().numpy() for output in outputs
+            torch_tools.to_numpy(output["dmu_dr"].clone().detach()) for output in outputs
         ]
         if self.models[0].use_polarizability:
             polarizability_derivatives = [
-                output["dalpha_dr"].clone().detach().cpu().numpy() for output in outputs
+                torch_tools.to_numpy(output["dalpha_dr"].clone().detach()) for output in outputs
             ]
             if self.num_models == 1:
                 dipole_derivatives = dipole_derivatives[0]
@@ -603,7 +595,7 @@ class MACECalculator(Calculator):
             )["hessian"]
             for model in self.models
         ]
-        hessians = [hessian.detach().cpu().numpy() for hessian in hessians]
+        hessians = [torch_tools.to_numpy(hessian.detach()) for hessian in hessians]
         if self.num_models == 1:
             return hessians[0]
         return hessians
@@ -647,7 +639,7 @@ class MACECalculator(Calculator):
             ]
         to_keep = np.sum(per_layer_features[:num_layers])
         descriptors = [
-            descriptor[:, :to_keep].detach().cpu().numpy() for descriptor in descriptors
+            torch_tools.to_numpy(descriptor[:, :to_keep].detach()) for descriptor in descriptors
         ]
 
         if self.num_models == 1:

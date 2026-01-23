@@ -19,6 +19,7 @@ from mace.data import AtomicData, KeySpecification
 from mace.data.utils import Configuration
 from mace.tools import torch_geometric
 from mace.tools.scripts_utils import SubsetCollection, get_dataset_from_xyz
+from mace.tools.torch_tools import to_numpy
 from mace.tools.utils import AtomicNumberTable, get_cache_dir
 
 
@@ -292,19 +293,19 @@ def generate_pseudolabels_for_configs(
                     node_end = batch.ptr[j + 1].item()
 
                     config_copy.properties["forces"] = (
-                        out["forces"][node_start:node_end].detach().cpu().numpy()
+                        to_numpy(out["forces"][node_start:node_end])
                     )
                 if "stress" in out and out["stress"] is not None:
                     config_copy.properties["stress"] = (
-                        out["stress"][j].detach().cpu().numpy()
+                        to_numpy(out["stress"][j])
                     )
                 if "virials" in out and out["virials"] is not None:
                     config_copy.properties["virials"] = (
-                        out["virials"][j].detach().cpu().numpy()
+                        to_numpy(out["virials"][j])
                     )
                 if "dipole" in out and out["dipole"] is not None:
                     config_copy.properties["dipole"] = (
-                        out["dipole"][j].detach().cpu().numpy()
+                        to_numpy(out["dipole"][j])
                     )
                 if "charges" in out and out["charges"] is not None:
                     # Charges are per atom
@@ -312,7 +313,7 @@ def generate_pseudolabels_for_configs(
                     node_end = batch.ptr[j + 1].item()
 
                     config_copy.properties["charges"] = (
-                        out["charges"][node_start:node_end].detach().cpu().numpy()
+                        to_numpy(out["charges"][node_start:node_end])
                     )
 
                 updated_configs.append(config_copy)

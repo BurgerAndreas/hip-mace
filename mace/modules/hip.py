@@ -9,6 +9,7 @@ from mace.tools.torch_geometric.batch import Batch as TGBatch
 
 from mace.data import get_neighborhood
 from .utils import get_edge_vectors_and_lengths
+from mace.tools.torch_tools import to_numpy
 
 try:
     from mace.modules.ocp_graph_utils import generate_graph
@@ -424,8 +425,8 @@ def add_hessian_graph_batch(
         device = data["positions"].device
         dtype = data["positions"].dtype
         
-        positions_np = data["positions"].detach().cpu().numpy()
-        batch_np = data["batch"].detach().cpu().numpy()
+        positions_np = to_numpy(data["positions"])
+        batch_np = to_numpy(data["batch"])
         
         edge_indices_list = []
         shifts_list = []

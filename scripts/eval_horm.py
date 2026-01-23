@@ -10,6 +10,7 @@ from torch_geometric.loader import DataLoader as TGDataLoader
 from mace import data, modules, tools
 
 from mace.modules.frequency_analysis import analyze_frequencies_np, Z_TO_ATOM_SYMBOL
+from mace.tools.torch_tools import to_numpy
 from mace.tools.checkpoint import CheckpointIO, CheckpointBuilder
 from mace.calculators.mace import MACECalculator
 from mace.tools.run_train_utils import (
@@ -215,8 +216,8 @@ def evaluate_hessian_on_horm_dataset(
         
         # Analyze frequency & Eckart (mass weighting)
         true_freqs = analyze_frequencies_np(
-            hessian=hessian_true.detach().cpu().numpy(),
-            cart_coords=batch["positions"].detach().cpu().numpy(),
+            hessian=to_numpy(hessian_true),
+            cart_coords=to_numpy(batch["positions"]),
             atomsymbols=symbols,
         )
         true_neg_num = true_freqs["neg_num"]
@@ -224,8 +225,8 @@ def evaluate_hessian_on_horm_dataset(
         true_eigvals_eckart = torch.tensor(true_freqs["eigvals"])
 
         freqs_model = analyze_frequencies_np(
-            hessian=hessian_model.detach().cpu().numpy(),
-            cart_coords=batch["positions"].detach().cpu().numpy(),
+            hessian=to_numpy(hessian_model),
+            cart_coords=to_numpy(batch["positions"]),
             atomsymbols=symbols,
         )
         freqs_model_neg_num = freqs_model["neg_num"]
