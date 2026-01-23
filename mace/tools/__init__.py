@@ -7,6 +7,7 @@ from .finetuning_utils import load_foundations, load_foundations_elements
 from .torch_tools import (
     TensorDict,
     cartesian_to_spherical,
+    check_bfloat16_support,
     count_parameters,
     init_device,
     set_default_dtype,
@@ -40,6 +41,7 @@ __all__ = [
     "to_one_hot",
     "build_default_arg_parser",
     "check_args",
+    "check_bfloat16_support",
     "DefaultKeys",
     "set_seeds",
     "init_device",

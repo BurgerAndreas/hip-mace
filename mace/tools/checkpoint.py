@@ -8,7 +8,9 @@ import dataclasses
 import logging
 import os
 import re
-from typing import Dict, List, Optional, Tuple
+from copy import deepcopy
+from pathlib import Path
+from typing import Callable, Dict, List, Optional, Tuple
 
 import torch
 
@@ -209,15 +211,28 @@ class CheckpointIO:
 
 
 class CheckpointHandler:
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(
+        self,
+        *args,
+        model_saver_callback: Optional[Callable[[torch.nn.Module, int], None]] = None,
+        **kwargs
+    ) -> None:
         self.io = CheckpointIO(*args, **kwargs)
         self.builder = CheckpointBuilder()
+        self.model_saver_callback = model_saver_callback
 
     def save(
         self, state: CheckpointState, epochs: int, keep_last: bool = False
     ) -> None:
         checkpoint = self.builder.create_checkpoint(state)
         self.io.save(checkpoint, epochs, keep_last)
+
+        # Save .model file if callback is provided
+        if self.model_saver_callback is not None:
+            try:
+                self.model_saver_callback(state.model, epochs)
+            except Exception as e:
+                logging.warning(f"Failed to save .model file: {e}")
 
     def load_latest(
         self,

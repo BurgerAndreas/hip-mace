@@ -876,11 +876,46 @@ def run(args) -> Dict[str, Any]:
     if args.swa:
         swa, swas = get_swa(args, model, optimizer, swas, dipole_only)
 
+    # Create model saver callback for saving .model files during training
+    def save_model_file(model_to_checkpoint: torch.nn.Module, epoch: int) -> None:
+        """Save .model file during training"""
+        if rank != 0:
+            return  # Only save on rank 0 in distributed training
+
+        model_filename = f"{tag}_epoch-{epoch}.model"
+        model_path = Path(args.checkpoints_dir) / model_filename
+
+        logging.info(f"Saving .model file to {model_path}")
+
+        # Create a copy of the model for saving
+        model_to_save = deepcopy(model_to_checkpoint)
+
+        # Apply conversions if needed (conversion functions already handle deepcopy internally)
+        if args.enable_cueq and not args.only_cueq:
+            try:
+                model_to_save = run_cueq_to_e3nn(model_to_save, device=device)
+            except Exception as e:
+                logging.warning(f"Failed to convert CUEQ to E3NN: {e}")
+
+        if args.enable_oeq:
+            try:
+                model_to_save = run_oeq_to_e3nn(model_to_save, device=device)
+            except Exception as e:
+                logging.warning(f"Failed to convert OEQ to E3NN: {e}")
+
+        # Save to CPU if requested
+        if args.save_cpu:
+            model_to_save = model_to_save.to("cpu")
+
+        # Save the model
+        torch.save(model_to_save, model_path)
+
     checkpoint_handler = tools.CheckpointHandler(
         directory=args.checkpoints_dir,
         tag=tag,
         keep=args.keep_checkpoints,
         swa_start=args.start_swa,
+        model_saver_callback=save_model_file,
     )
 
     start_epoch = 0
