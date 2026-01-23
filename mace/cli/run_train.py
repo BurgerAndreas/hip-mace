@@ -878,12 +878,21 @@ def run(args) -> Dict[str, Any]:
 
     # Create model saver callback for saving .model files during training
     def save_model_file(model_to_checkpoint: torch.nn.Module, epoch: int) -> None:
-        """Save .model file during training"""
+        """Save .model file during training (only keeps latest)"""
         if rank != 0:
             return  # Only save on rank 0 in distributed training
 
-        model_filename = f"{tag}_epoch-{epoch}.model"
+        # Use consistent filename without epoch (only keep latest)
+        model_filename = f"{tag}.model"
         model_path = Path(args.checkpoints_dir) / model_filename
+
+        # Delete any old epoch-versioned .model files
+        for old_model in Path(args.checkpoints_dir).glob(f"{tag}_epoch-*.model"):
+            try:
+                old_model.unlink()
+                logging.info(f"Deleted old .model file: {old_model}")
+            except Exception as e:
+                logging.warning(f"Failed to delete old .model file {old_model}: {e}")
 
         logging.info(f"Saving .model file to {model_path}")
 

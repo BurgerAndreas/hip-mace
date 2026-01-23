@@ -115,13 +115,15 @@ def evaluate_hessian_on_horm_dataset(
     
     # checkpoint usually looks like this:
     # checkpoints/20260105_112332/horm100_run-42/
-    # horm100_run-42_epoch-99.pt  horm100_run-42.model
-    # .model file ontains only the trained model weights and architecture, without optimizer state
+    # horm100_run-42.model
+    # .model file contains only the trained model weights and architecture, without optimizer state
     model_files = glob.glob(str(args.checkpoints_dir + "/*.model"))
     if len(model_files) == 0:
         raise FileNotFoundError(f"No .model file found in {args.checkpoints_dir}: {os.listdir(args.checkpoints_dir)}")
     if len(model_files) > 1:
-        raise ValueError(f"Multiple .model files found in {args.checkpoints_dir}: {model_files}")
+        # Pick the latest .model file by modification time
+        model_files.sort(key=os.path.getmtime, reverse=True)
+        print(f"Multiple .model files found, using latest: {model_files[0]}")
     checkpoint_path = model_files[0]
     
     device = torch_tools.init_device(args.device)
