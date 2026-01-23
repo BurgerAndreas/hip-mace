@@ -4,6 +4,7 @@ import numpy as np
 import wandb
 import pandas as pd
 import os
+import json
 from tqdm import tqdm
 from torch_geometric.loader import DataLoader as TGDataLoader
 
@@ -42,6 +43,66 @@ from mace import data
 from mace.cli.convert_e3nn_cueq import run as run_e3nn_to_cueq
 from mace.modules.utils import extract_invariant
 from mace.tools import torch_geometric, torch_tools, utils
+
+
+def load_config_from_wandb_run(wandb_run: str, wandb_project: str = None, wandb_entity: str = None) -> dict:
+    """
+    Load config from a wandb run.
+
+    Args:
+        wandb_run: Either a full run path "entity/project/run_id" or just a run_id
+        wandb_project: Project name (required if wandb_run is just a run_id)
+        wandb_entity: Entity name (optional, uses default if not provided)
+
+    Returns:
+        dict: The run config including checkpoints_dir
+    """
+    api = wandb.Api()
+
+    # Parse the wandb_run argument
+    parts = wandb_run.split("/")
+    if len(parts) == 3:
+        # Full path: entity/project/run_id
+        run_path = wandb_run
+    elif len(parts) == 2:
+        # project/run_id format
+        run_path = wandb_run
+    elif len(parts) == 1:
+        # Just run_id, need project (and optionally entity)
+        if wandb_project is None:
+            raise ValueError(
+                "wandb_project is required when wandb_run is just a run_id. "
+                "Either provide --wandb_project or use full path: entity/project/run_id"
+            )
+        if wandb_entity:
+            run_path = f"{wandb_entity}/{wandb_project}/{wandb_run}"
+        else:
+            run_path = f"{wandb_project}/{wandb_run}"
+    else:
+        raise ValueError(
+            f"Invalid wandb_run format: {wandb_run}. "
+            "Use either 'run_id', 'project/run_id', or 'entity/project/run_id'"
+        )
+
+    print(f"Loading config from wandb run: {run_path}")
+    run = api.run(run_path)
+
+    # Get config from the run
+    config = dict(run.config)
+
+    # Also try to get full params from summary if available
+    if "params" in run.summary:
+        try:
+            full_params = json.loads(run.summary["params"])
+            # Merge full_params into config (full_params takes precedence for any overlapping keys)
+            for key, value in full_params.items():
+                if key not in config:
+                    config[key] = value
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    print(f"Loaded config with checkpoints_dir: {config.get('checkpoints_dir', 'NOT FOUND')}")
+    return config
 
 def evaluate_hessian_on_horm_dataset(
     args: argparse.Namespace,
@@ -331,67 +392,135 @@ def evaluate_hessian_on_horm_dataset(
     return df_results, aggregated_results
 
 
-# if __name__ == "__main__":
-#     parser = argparse.ArgumentParser(description="Evaluate MACE model on dataset (autograd vs HIP hessian)")
-#     parser.add_argument(
-#         "--ckpt_path",
-#         "-c",
-#         type=str,
-#         required=True,
-#         help="Path to checkpoint file (MACE .pt)",
-#     )
-#     parser.add_argument(
-#         "--config_path",
-#         type=str,
-#         default=None,
-#         help="Path to config file. (not used)",
-#     )
-#     parser.add_argument(
-#         "--hessian_method",
-#         "-hm",
-#         choices=["autograd", "predict"],
-#         type=str,
-#         required=True,
-#         help="Hessian computation method: autograd (autodiff), predict (HIP/predicted)",
-#     )
-#     parser.add_argument(
-#         "--dataset",
-#         "-d",
-#         type=str,
-#         required=True,
-#         help="Dataset file name or path (e.g. RGD1_100.lmdb, see configs/horm_100.yaml)",
-#     )
-#     parser.add_argument(
-#         "--max_samples",
-#         "-m",
-#         type=int,
-#         default=None,
-#         help="Maximum number of samples to evaluate (default: all samples)",
-#     )
-#     parser.add_argument(
-#         "--redo",
-#         "-r",
-#         type=bool,
-#         default=False,
-#         help="Run eval from scratch even if results already exist",
-#     )
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Evaluate MACE model on dataset (autograd vs HIP hessian)"
+    )
 
-#     args = parser.parse_args()
+    # Main argument: checkpoint dir OR wandb run ID (auto-detected)
+    parser.add_argument(
+        "run",
+        type=str,
+        help="Checkpoint directory path OR wandb run ID. Auto-detected: if path exists as directory, treated as checkpoint dir; otherwise as wandb run ID.",
+    )
+    parser.add_argument(
+        "--wandb_project",
+        type=str,
+        default="hip-mace",
+        help="Wandb project name (default: hip-mace)",
+    )
+    parser.add_argument(
+        "--wandb_entity",
+        type=str,
+        default=None,
+        help="Wandb entity name (optional)",
+    )
 
-#     torch.manual_seed(42)
+    # Evaluation options
+    parser.add_argument(
+        "--predict_hessian",
+        action="store_true",
+        default=False,
+        help="Use HIP predicted hessian instead of autograd",
+    )
+    parser.add_argument(
+        "--valid_file",
+        type=str,
+        default=None,
+        help="Validation dataset file path (overrides config)",
+    )
+    parser.add_argument(
+        "--max_samples",
+        "-m",
+        type=int,
+        default=None,
+        help="Maximum number of samples to evaluate (default: all samples)",
+    )
+    parser.add_argument(
+        "--redo",
+        "-r",
+        action="store_true",
+        default=False,
+        help="Run eval from scratch even if results already exist",
+    )
 
-#     checkpoint_path = args.ckpt_path
-#     lmdb_path = args.dataset
-#     max_samples = args.max_samples
-#     config_path = args.config_path
-#     hessian_method = args.hessian_method
-#     redo = args.redo
+    # Device and precision
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cuda",
+        help="Device to run on (default: cuda)",
+    )
+    parser.add_argument(
+        "--default_dtype",
+        type=str,
+        default="float64",
+        help="Default dtype (default: float64)",
+    )
+    parser.add_argument(
+        "--enable_cueq",
+        action="store_true",
+        default=False,
+        help="Enable CuEq acceleration",
+    )
 
-#     df_results, aggregated_results = evaluate_hessian_on_horm_dataset(
-#         lmdb_path=lmdb_path,
-#         checkpoint_path=checkpoint_path,
-#         config_path=config_path,
-#         hessian_method=hessian_method,
-#         max_samples=max_samples,
-#         redo=redo,
-#     )
+    # Data keys (can override from config)
+    parser.add_argument("--energy_key", type=str, default="energy")
+    parser.add_argument("--forces_key", type=str, default="forces")
+    parser.add_argument("--hessian_key", type=str, default="hessian")
+
+    args = parser.parse_args()
+
+    # Auto-detect if run is a checkpoint dir or wandb run ID
+    if os.path.isdir(args.run):
+        # It's a checkpoint directory
+        print(f"Detected checkpoint directory: {args.run}")
+        args.checkpoints_dir = args.run
+        args.wandb_run_id = None
+    else:
+        # Treat as wandb run ID
+        print(f"Detected wandb run ID: {args.run}")
+        config = load_config_from_wandb_run(
+            wandb_run=args.run,
+            wandb_project=args.wandb_project,
+            wandb_entity=args.wandb_entity,
+        )
+
+        # Set checkpoints_dir from wandb config
+        if "checkpoints_dir" not in config:
+            raise ValueError(f"checkpoints_dir not found in wandb run config")
+        args.checkpoints_dir = config["checkpoints_dir"]
+
+        # Set other args from config if not explicitly provided
+        if args.valid_file is None and "valid_file" in config:
+            args.valid_file = config["valid_file"]
+        if "r_max" in config:
+            args.r_max = config["r_max"]
+        if "default_dtype" in config and args.default_dtype == "float64":
+            # Only override if user didn't explicitly set it
+            args.default_dtype = config["default_dtype"]
+
+        # Use wandb run id for logging
+        parts = args.run.split("/")
+        args.wandb_run_id = parts[-1]  # Last part is always the run_id
+
+    # Validate that we have required args
+    if args.valid_file is None:
+        parser.error("--valid_file is required (either directly or from wandb config)")
+
+    # Set r_max if not already set (will be loaded from model)
+    if not hasattr(args, "r_max"):
+        args.r_max = 5.0  # Default, model will override if needed
+
+    torch.manual_seed(42)
+
+    df_results, aggregated_results = evaluate_hessian_on_horm_dataset(
+        args=args,
+        max_samples=args.max_samples,
+        redo=args.redo,
+    )
+
+    if aggregated_results is not None:
+        print("\n--- Aggregated Results ---")
+        for key, value in aggregated_results.items():
+            print(f"{key}: {value:.6f}")
