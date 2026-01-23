@@ -255,7 +255,10 @@ def evaluate_hessian_on_horm_dataset(
         force_true = batch["forces"]
         hessian_true = batch["hessian"].reshape(n_atoms * 3, n_atoms * 3)
 
-        # Eigendecomposition
+        # Eigendecomposition (cast to float32 if bf16, as linalg_eigh doesn't support bf16)
+        if hessian_model.dtype == torch.bfloat16:
+            hessian_model = hessian_model.float()
+            hessian_true = hessian_true.float()
         eigvals_model, eigvecs_model = torch.linalg.eigh(hessian_model)
         eigvals_true, eigvecs_true = torch.linalg.eigh(hessian_true)
 

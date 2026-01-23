@@ -30,6 +30,7 @@ def create_error_table(
     device: str,
     distributed: bool = False,
     skip_heads: Optional[List[str]] = None,
+    train_max_samples: Optional[int] = None,
 ) -> PrettyTable:
     if log_wandb:
         import wandb
@@ -113,13 +114,19 @@ def create_error_table(
             logging.info(f"Skipping evaluation of {name} (in skip_heads list)")
             continue
         data_loader = all_data_loaders[name]
-        logging.info(f"Evaluating {name} ...")
+        # Apply max_samples limit to training data loaders only
+        max_samples = train_max_samples if name.startswith("train") else None
+        if max_samples is not None:
+            logging.info(f"Evaluating {name} (limited to {max_samples} samples) ...")
+        else:
+            logging.info(f"Evaluating {name} ...")
         _, metrics = evaluate(
             model,
             loss_fn=loss_fn,
             data_loader=data_loader,
             output_args=output_args,
             device=device,
+            max_samples=max_samples,
         )
         if distributed:
             torch.distributed.barrier()
