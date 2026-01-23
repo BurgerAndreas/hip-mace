@@ -511,7 +511,7 @@ def take_step(
         optimizer.zero_grad(set_to_none=True)
 
         # Wrap forward + loss in autocast
-        with torch.cuda.amp.autocast(enabled=amp_enabled, dtype=amp_dtype):
+        with torch.amp.autocast('cuda', enabled=amp_enabled, dtype=amp_dtype):
             output = model(
                 batch_dict,
                 training=True,
@@ -674,7 +674,7 @@ def evaluate(
         batch_dict = batch.to_dict()
 
         # Wrap forward in autocast (no gradient scaling needed for inference)
-        with torch.cuda.amp.autocast(enabled=amp_enabled, dtype=amp_dtype):
+        with torch.amp.autocast('cuda', enabled=amp_enabled, dtype=amp_dtype):
             output = model(
                 batch_dict,
                 training=False,

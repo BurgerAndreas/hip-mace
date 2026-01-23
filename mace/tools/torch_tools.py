@@ -46,6 +46,9 @@ def set_seeds(seed: int) -> None:
 
 
 def to_numpy(t: torch.Tensor) -> np.ndarray:
+    # NumPy doesn't support BFloat16, convert to float32 first
+    if t.dtype == torch.bfloat16:
+        t = t.float()
     return t.cpu().detach().numpy()
 
 
