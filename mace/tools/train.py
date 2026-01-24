@@ -32,6 +32,7 @@ from . import torch_geometric
 from .checkpoint import CheckpointHandler, CheckpointState
 from .torch_tools import to_numpy
 from .utils import (
+    AtomicNumberTable,
     MetricsLogger,
     compute_mae,
     compute_q95,
@@ -40,6 +41,7 @@ from .utils import (
     compute_rmse,
     filter_nonzero_weight,
 )
+from mace.modules.frequency_analysis import analyze_frequencies_np, analyze_frequencies_torch, Z_TO_ATOM_SYMBOL
 
 # Suppress TorchScript type annotation warnings
 warnings.filterwarnings(
@@ -669,6 +671,15 @@ def evaluate(
 
     metrics = MACELoss(loss_fn=loss_fn).to(device)
 
+    # Initialize eckart metrics accumulators if hessians are predicted
+    eckart_eigval_maes = []
+    eckart_eigvec_cosines = []
+    
+    # Get z_table from model for converting node_attrs to atomic numbers
+    z_table = None
+    if output_args["hip"] and hasattr(model, "atomic_numbers"):
+        z_table = AtomicNumberTable([int(z) for z in model.atomic_numbers])
+
     start_time = time.time()
     total_samples = 0
     for batch in data_loader:
@@ -688,6 +699,81 @@ def evaluate(
 
         avg_loss, aux = metrics(batch, output)
 
+        # If hessians are predicted, compute eckart metrics
+        if output_args["hip"] and output.get("hessian") is not None and batch.hessian is not None and z_table is not None:
+            aux["eckart_eigval_mae_1_list"] = []
+            aux["eckart_eigval_mae_2_list"] = []
+            aux["eckart_eigvec_cos_1_list"] = []
+            aux["eckart_eigvec_cos_2_list"] = []
+            aux["fraction_zero_hessian_list"] = []
+            # Loop over samples in batch
+            num_graphs = batch.num_graphs
+            hessian_offset = 0
+            for i in range(num_graphs):
+                n_atoms = (batch.batch == i).sum().item()
+                hessian_size = (n_atoms * 3) ** 2
+
+                # Extract hessians for this sample from 1D arrays
+                hessian_pred_1d = output["hessian"][hessian_offset:hessian_offset + hessian_size]
+                hessian_true_1d = batch.hessian[hessian_offset:hessian_offset + hessian_size]
+
+                # Reshape to (n_atoms*3, n_atoms*3) matrices
+                hessian_pred = hessian_pred_1d.reshape(n_atoms * 3, n_atoms * 3)
+                hessian_true = hessian_true_1d.reshape(n_atoms * 3, n_atoms * 3)
+
+                # Update offset for next sample
+                hessian_offset += hessian_size
+
+                # Calculate fraction of zero values in the hessian
+                num_zero = torch.sum(hessian_pred == 0)
+                num_total = hessian_pred.numel()
+                fraction_zero_hessian = num_zero.item() / num_total
+                aux["fraction_zero_hessian_list"].append(fraction_zero_hessian)
+
+                # Extract positions for this sample
+                positions = batch.positions[batch.ptr[i]:batch.ptr[i+1]] # (N, 3)
+
+                # Convert node_attrs to atomic numbers
+                node_attrs_sample = batch.node_attrs[batch.ptr[i]:batch.ptr[i+1]] # (N, Z_table.num_z)
+                atomic_numbers = torch.tensor([z_table.index_to_z(z) for z in node_attrs_sample.argmax(dim=-1)], device=device)
+                symbols = [Z_TO_ATOM_SYMBOL[z.item()] for z in atomic_numbers]
+
+                # Analyze frequencies with eckart projection using torch version
+                freqs_pred = analyze_frequencies_torch(
+                    hessian=hessian_pred,
+                    cart_coords=positions,
+                    atomsymbols=symbols,
+                )
+                freqs_true = analyze_frequencies_torch(
+                    hessian=hessian_true,
+                    cart_coords=positions,
+                    atomsymbols=symbols,
+                )
+
+                # Compute eckart eigenvalue MAEs for j=0 (mode 1) and j=1 (mode 2)
+                eigvals_pred = freqs_pred["eigvals"]
+                eigvals_true = freqs_true["eigvals"]
+                eigval_mae_1 = torch.abs(eigvals_pred[0] - eigvals_true[0]).item()
+                eigval_mae_2 = torch.abs(eigvals_pred[1] - eigvals_true[1]).item()
+                eckart_eigval_maes.append(torch.mean(torch.abs(eigvals_pred - eigvals_true)).item())
+
+                # Compute eckart eigenvector cosines for j=0 (mode 1) and j=1 (mode 2)
+                eigvecs_pred = freqs_pred["eigvecs"]
+                eigvecs_true = freqs_true["eigvecs"]
+                cos_sim_1 = torch.abs(torch.dot(eigvecs_pred[:, 0], eigvecs_true[:, 0])).item()
+                cos_sim_2 = torch.abs(torch.dot(eigvecs_pred[:, 1], eigvecs_true[:, 1])).item()
+                eckart_eigvec_cosines.append([
+                    cos_sim_1,
+                    cos_sim_2,
+                ])
+                # Store val MAE for mode 1 and 2 individually
+                aux["eckart_eigval_mae_1_list"].append(eigval_mae_1)
+                aux["eckart_eigval_mae_2_list"].append(eigval_mae_2)
+
+                # Store vec cosine for mode 1 and 2 individually
+                aux["eckart_eigvec_cos_1_list"].append(cos_sim_1)
+                aux["eckart_eigvec_cos_2_list"].append(cos_sim_2)
+
         # Limit evaluation to max_samples if specified
         if max_samples is not None:
             batch_size = getattr(batch, "num_graphs", 1)
@@ -697,6 +783,28 @@ def evaluate(
 
     avg_loss, aux = metrics.compute()
     aux["time"] = time.time() - start_time
+
+    # Add eckart metrics to aux if computed
+    if eckart_eigval_maes:
+        aux["eckart_eigval_mae"] = np.mean(eckart_eigval_maes)
+        # Log averages for mode 1 and 2 separately
+        if "eckart_eigval_mae_1_list" in aux and len(aux["eckart_eigval_mae_1_list"]) > 0:
+            aux["eckart_eigval_mae_1"] = np.nanmean(aux["eckart_eigval_mae_1_list"])
+        if "eckart_eigval_mae_2_list" in aux and len(aux["eckart_eigval_mae_2_list"]) > 0:
+            aux["eckart_eigval_mae_2"] = np.nanmean(aux["eckart_eigval_mae_2_list"])
+        # Compute cosine averages for mode 1 and 2
+        if "eckart_eigvec_cos_1_list" in aux and len(aux["eckart_eigvec_cos_1_list"]) > 0:
+            aux["eckart_eigvec_cos_1"] = np.nanmean(aux["eckart_eigvec_cos_1_list"])
+        if "eckart_eigvec_cos_2_list" in aux and len(aux["eckart_eigvec_cos_2_list"]) > 0:
+            aux["eckart_eigvec_cos_2"] = np.nanmean(aux["eckart_eigvec_cos_2_list"])
+        # For backward compatibility (legacy averaging)
+        if eckart_eigvec_cosines:
+            arr = np.array(eckart_eigvec_cosines)
+            if arr.ndim == 2 and arr.shape[1] >= 2:
+                aux["eckart_eigvec_cos"] = np.nanmean(arr)
+            else:
+                aux["eckart_eigvec_cos"] = float("nan")
+
     metrics.reset()
 
     for param in model.parameters():

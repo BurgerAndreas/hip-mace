@@ -7,7 +7,7 @@ import einops
 from typing import Optional, Tuple
 from mace.tools.torch_geometric.batch import Batch as TGBatch
 
-from mace.data import get_neighborhood
+from mace.data.neighborhood import get_neighborhood
 from .utils import get_edge_vectors_and_lengths
 from mace.tools.torch_tools import to_numpy
 
