@@ -31,6 +31,7 @@ from mace.data import KeySpecification, update_keyspec_from_kwargs
 
 import argparse
 from typing import Dict
+import yaml
 
 import ase.data
 import ase.io
@@ -423,12 +424,6 @@ if __name__ == "__main__":
 
     # Evaluation options
     parser.add_argument(
-        "--predict_hessian",
-        action="store_true",
-        default=False,
-        help="Use HIP predicted hessian instead of autograd",
-    )
-    parser.add_argument(
         "--valid_file",
         type=str,
         default=None,
@@ -449,7 +444,7 @@ if __name__ == "__main__":
         help="Run eval from scratch even if results already exist",
     )
 
-    # Device and precision
+    # Device
     parser.add_argument(
         "--device",
         type=str,
@@ -457,22 +452,11 @@ if __name__ == "__main__":
         help="Device to run on (default: cuda)",
     )
     parser.add_argument(
-        "--default_dtype",
-        type=str,
-        default="float64",
-        help="Default dtype (default: float64)",
-    )
-    parser.add_argument(
         "--enable_cueq",
         action="store_true",
         default=False,
         help="Enable CuEq acceleration",
     )
-
-    # Data keys (can override from config)
-    parser.add_argument("--energy_key", type=str, default="energy")
-    parser.add_argument("--forces_key", type=str, default="forces")
-    parser.add_argument("--hessian_key", type=str, default="hessian")
 
     args = parser.parse_args()
 
@@ -485,37 +469,37 @@ if __name__ == "__main__":
     else:
         # Treat as wandb run ID
         print(f"Detected wandb run ID: {args.run}")
-        config = load_config_from_wandb_run(
+        wandb_config = load_config_from_wandb_run(
             wandb_run=args.run,
             wandb_project=args.wandb_project,
             wandb_entity=args.wandb_entity,
         )
-
-        # Set checkpoints_dir from wandb config
-        if "checkpoints_dir" not in config:
-            raise ValueError(f"checkpoints_dir not found in wandb run config")
-        args.checkpoints_dir = config["checkpoints_dir"]
-
-        # Set other args from config if not explicitly provided
-        if args.valid_file is None and "valid_file" in config:
-            args.valid_file = config["valid_file"]
-        if "r_max" in config:
-            args.r_max = config["r_max"]
-        if "default_dtype" in config and args.default_dtype == "float64":
-            # Only override if user didn't explicitly set it
-            args.default_dtype = config["default_dtype"]
-
+        args.checkpoints_dir = wandb_config["checkpoints_dir"]
         # Use wandb run id for logging
         parts = args.run.split("/")
         args.wandb_run_id = parts[-1]  # Last part is always the run_id
 
-    # Validate that we have required args
-    if args.valid_file is None:
-        parser.error("--valid_file is required (either directly or from wandb config)")
+    # Load training config from checkpoint directory
+    config_path = os.path.join(args.checkpoints_dir, "config.yaml")
+    print(f"Loading training config from {config_path}")
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f)
 
-    # Set r_max if not already set (will be loaded from model)
-    if not hasattr(args, "r_max"):
-        args.r_max = 5.0  # Default, model will override if needed
+    # Apply training config settings
+    args.hip = config["hip"]
+    args.predict_hessian = config["predict_hessian"]
+    args.r_max = config["r_max"]
+    args.energy_key = config["energy_key"]
+    args.forces_key = config["forces_key"]
+    args.hessian_key = config["hessian_key"]
+    args.default_dtype = config["default_dtype"]
+
+    # Validation file: command-line overrides config
+    if args.valid_file is None:
+        args.valid_file = config["valid_file"]
+
+    print(f"Training config: hip={args.hip}, predict_hessian={args.predict_hessian}, "
+          f"default_dtype={args.default_dtype}, r_max={args.r_max}")
 
     torch.manual_seed(42)
 
