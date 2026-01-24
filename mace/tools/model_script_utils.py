@@ -198,6 +198,7 @@ def configure_model(
             hessian_aggregation=args.hessian_aggregation,
             hessian_edge_feature_method=args.hessian_edge_feature_method,
             hessian_message_passing_layer=args.hessian_message_passing_layer,
+            num_interactions_hessian=args.num_interactions_hessian,
         )
         model_config_foundation = None
 

@@ -95,6 +95,7 @@ class MACE(torch.nn.Module):
         hessian_separate_radial_network: bool = False,  # Use dedicated radial MLP for Hessian (not shared with energy)
         hessian_radial_MLP: Optional[List[int]] = None,  # Radial MLP architecture for separate network
         hessian_use_edge_gates: bool = False,  # Add equivariant gating on off-diagonal features
+        num_interactions_hessian: int = 0,  # Number of additional interaction layers for Hessian prediction
     ):
         super().__init__()
         self.register_buffer(
@@ -441,8 +442,10 @@ class MACE(torch.nn.Module):
             if hessian_aggregation == "learnable":
                 # Learnable logits for softmax weighting across layers
                 # Initialize with zeros so initial weights are uniform (softmax(0) = 1/n)
+                # Size accounts for main backbone layers + additional Hessian layers
+                max_layers = num_interactions + num_interactions_hessian
                 self.hessian_layer_weights_param = torch.nn.Parameter(
-                    torch.zeros(num_interactions)
+                    torch.zeros(max_layers)
                 )
             
             # Output: One channel per degree (1+3+5 = 9 total elements)
@@ -488,6 +491,44 @@ class MACE(torch.nn.Module):
                     irreps_in=hidden_irreps,  # Changed from hessian_interaction_irreps to hidden_irreps
                     irreps_out=hessian_out_irreps
                 )
+
+            # Additional interaction layers for Hessian (if num_interactions_hessian > 0)
+            # These layers use the main graph to further refine node features before Hessian extraction
+            self.num_interactions_hessian = num_interactions_hessian
+            if num_interactions_hessian > 0:
+                self.hessian_interactions = torch.nn.ModuleList()
+                self.hessian_products = torch.nn.ModuleList()
+
+                # Create num_interactions_hessian additional layers using main graph architecture
+                for i in range(num_interactions_hessian):
+                    # These layers process on the main graph, so use main graph parameters
+                    hessian_inter = interaction_cls(
+                        node_attrs_irreps=node_attr_irreps,
+                        node_feats_irreps=hidden_irreps,
+                        edge_attrs_irreps=sh_irreps,  # Use main graph spherical harmonics
+                        edge_feats_irreps=edge_feats_irreps,  # Use main graph edge features
+                        target_irreps=interaction_irreps,
+                        hidden_irreps=hidden_irreps,
+                        avg_num_neighbors=avg_num_neighbors,
+                        edge_irreps=edge_irreps,
+                        radial_MLP=radial_MLP,  # Use main radial MLP
+                        cueq_config=cueq_config,
+                        oeq_config=oeq_config,
+                    )
+                    self.hessian_interactions.append(hessian_inter)
+
+                    hessian_prod = EquivariantProductBasisBlock(
+                        node_feats_irreps=interaction_irreps,
+                        target_irreps=hidden_irreps,
+                        correlation=correlation[-1] if isinstance(correlation, list) else correlation,
+                        num_elements=num_elements,
+                        use_sc=True,
+                        cueq_config=cueq_config,
+                        oeq_config=oeq_config,
+                        use_reduced_cg=use_reduced_cg,
+                        use_agnostic_product=use_agnostic_product,
+                    )
+                    self.hessian_products.append(hessian_prod)
 
     def forward(
         self,
@@ -654,7 +695,7 @@ class MACE(torch.nn.Module):
 
         if predict_hessian:
             hessian = self._predict_hessian_hip(
-                data, node_feats_list
+                data, node_feats_list, edge_attrs, edge_feats, cutoff
             )
 
         return {
@@ -701,7 +742,14 @@ class MACE(torch.nn.Module):
         return result
         
     
-    def _predict_hessian_hip(self, data, node_feats_list) -> torch.Tensor:
+    def _predict_hessian_hip(
+        self,
+        data,
+        node_feats_list,
+        edge_attrs,
+        edge_feats,
+        cutoff,
+    ) -> torch.Tensor:
         """Predict Hessian from l=0,1,2 features."""
         # Compute the graph for the Hessian
         # Usually the graph is computed in AtomicData.__init__()
@@ -766,7 +814,31 @@ class MACE(torch.nn.Module):
             edge_vec_normalized_sh = self.hessian_r_ij_spherical_harmonics(
                 edge_vec_normalized.to(node_feats_list[0].dtype)
             )
-        
+
+        # Run additional Hessian-specific interaction layers if configured
+        # These layers use the main graph to further refine node features
+        if self.num_interactions_hessian > 0:
+            # Start with the last node features from the main backbone
+            node_feats_hessian = node_feats_list[-1]
+
+            # Run Hessian-specific interaction layers on the main graph
+            for interaction, product in zip(self.hessian_interactions, self.hessian_products):
+                node_feats_hessian, sc = interaction(
+                    node_attrs=data["node_attrs"],
+                    node_feats=node_feats_hessian,
+                    edge_attrs=edge_attrs,  # Use main graph edge attributes
+                    edge_feats=edge_feats,  # Use main graph edge features
+                    edge_index=data["edge_index"],  # Use main graph
+                    cutoff=cutoff,  # Use main graph cutoff
+                )
+                node_feats_hessian = product(
+                    node_feats=node_feats_hessian,
+                    sc=sc,
+                    node_attrs=data["node_attrs"],
+                )
+                # Append refined features to the list for Hessian prediction
+                node_feats_list.append(node_feats_hessian)
+
         # Make l=0,1,2 node and edge features for the Hessian
         diag_feats_list = []
         off_diag_feats_list = []
@@ -1107,7 +1179,7 @@ class ScaleShiftMACE(MACE):
         
         if predict_hessian:
             hessian = self._predict_hessian_hip(
-                data, node_feats_list
+                data, node_feats_list, edge_attrs, edge_feats, cutoff
             )
 
         return {

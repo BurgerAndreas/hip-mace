@@ -353,6 +353,12 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         type=str2bool,
         default=False,
     )
+    parser.add_argument(
+        "--num_interactions_hessian",
+        help="Number of additional interaction layers for Hessian prediction (0 = use main backbone features directly)",
+        type=int,
+        default=0,
+    )
 
     parser.add_argument(
         "--MLP_irreps",
