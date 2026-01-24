@@ -250,6 +250,12 @@ def evaluate_hessian_on_horm_dataset(
 
         hessian_model = hessian_model.reshape(n_atoms * 3, n_atoms * 3)
 
+        # Calculate fraction of zero values in the hessian
+        hessian_model_np = hessian_model.detach().cpu().numpy()
+        num_zero = np.sum(hessian_model_np == 0)
+        num_total = hessian_model_np.size
+        fraction_zero_hessian = float(num_zero) / float(num_total) if num_total > 0 else np.nan
+
         # True data - using correct batch keys
         ae_true = batch["energy"]
         force_true = batch["forces"]
@@ -341,6 +347,7 @@ def evaluate_hessian_on_horm_dataset(
             "eigvec2_cos_eckart": torch.abs(
                 torch.dot(eigvecs_model_eckart[:, 1], true_eigvecs_eckart[:, 1])
             ).item(),
+            "hessian_fraction_zero": fraction_zero_hessian,
         }
 
         sample_metrics.append(sample_data)
@@ -389,6 +396,8 @@ def evaluate_hessian_on_horm_dataset(
         # Speed
         "time": df_results["time"].mean(),  # ms
         "memory": df_results["memory"].mean(),
+        # Hessian zeros
+        "hessian_fraction_zero": df_results["hessian_fraction_zero"].mean(),
     }
 
     wandb.log(aggregated_results)
@@ -438,8 +447,8 @@ if __name__ == "__main__":
         "--max_samples",
         "-m",
         type=int,
-        default=None,
-        help="Maximum number of samples to evaluate (default: all samples)",
+        default=1000,
+        help="Maximum number of samples to evaluate (None: all samples)",
     )
     parser.add_argument(
         "--redo",

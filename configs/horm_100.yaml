@@ -61,7 +61,7 @@ hessian_key: hessian # for HIP
 
 # ====== Loss and optimization ======
 loss: l1l2energyforces # weighted = MSE for both energy and forces
-hessian_weight: 50.0
+hessian_weight: 100.0
 forces_weight: 100.0
 energy_weight: 1.0
 virials_weight: 1.0
@@ -70,11 +70,11 @@ beta: 0.9
 batch_size: 64
 valid_batch_size: 64
 lr: 0.01
-weight_decay: 5e-7
+weight_decay: 0.0
 amsgrad: true
 scheduler: ReduceLROnPlateau # CosineAnnealingLR
 lr_factor: 0.8
-scheduler_patience: 100
+scheduler_patience: 2
 lr_scheduler_gamma: 0.9993
 warmup_epochs: 100
 min_lr: 0.0001
@@ -83,7 +83,7 @@ ema: false
 ema_decay: 0.99
 max_num_epochs: 10000
 patience: 2048
-eval_interval: 1
+eval_interval: 100
 
 # ====== Acceleration options ======
 enable_cueq: false
