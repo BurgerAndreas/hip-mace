@@ -1253,6 +1253,7 @@ def run(args) -> Dict[str, Any]:
             device=device,
             distributed=args.distributed,
             skip_heads=skip_heads,
+            train_max_samples=args.samples_per_epoch,
         )
         logging.info("Error-table on TRAIN and VALID:\n" + str(table_train_valid))
 

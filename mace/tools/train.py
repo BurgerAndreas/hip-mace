@@ -662,6 +662,7 @@ def evaluate(
     device: torch.device,
     amp_enabled: bool = False,
     amp_dtype: torch.dtype = torch.float32,
+    max_samples: Optional[int] = None,
 ) -> Tuple[float, Dict[str, Any]]:
     for param in model.parameters():
         param.requires_grad = False
@@ -669,6 +670,7 @@ def evaluate(
     metrics = MACELoss(loss_fn=loss_fn).to(device)
 
     start_time = time.time()
+    total_samples = 0
     for batch in data_loader:
         batch = batch.to(device)
         batch_dict = batch.to_dict()
@@ -685,6 +687,13 @@ def evaluate(
             )
 
         avg_loss, aux = metrics(batch, output)
+
+        # Limit evaluation to max_samples if specified
+        if max_samples is not None:
+            batch_size = getattr(batch, "num_graphs", 1)
+            total_samples += batch_size
+            if total_samples >= max_samples:
+                break
 
     avg_loss, aux = metrics.compute()
     aux["time"] = time.time() - start_time
