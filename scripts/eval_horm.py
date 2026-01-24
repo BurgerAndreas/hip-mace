@@ -110,7 +110,7 @@ def evaluate_hessian_on_horm_dataset(
     redo=False,
 ):
     print("\n\n--- Evaluating Hessian on HORM dataset ---")
-    hessian_method = "predict" if args.predict_hessian else "autograd"
+    hessian_method = "predict" if args.hip else "autograd"
     print("Hessian method: ", hessian_method)
     
     # checkpoint usually looks like this:
