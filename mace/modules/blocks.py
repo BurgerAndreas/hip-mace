@@ -39,6 +39,11 @@ from .radial import (
 
 @compile_mode("script")
 class LinearNodeEmbeddingBlock(torch.nn.Module):
+    """
+    Applies a linear transformation to node attributes to produce node embeddings.
+    This block is typically used at the beginning of a network to project atomic numbers
+    (or other node-wise features) into a higher-dimensional equivariant feature space.
+    """
     def __init__(
         self,
         irreps_in: o3.Irreps,
@@ -59,6 +64,11 @@ class LinearNodeEmbeddingBlock(torch.nn.Module):
 
 @compile_mode("script")
 class LinearReadoutBlock(torch.nn.Module):
+    """
+    A simple linear readout block that applies a linear transformation
+    to input irreducible representations (irreps) to produce a scalar output (0e).
+    Typically used as a final layer for predicting scalar properties.
+    """
     def __init__(
         self,
         irreps_in: o3.Irreps,
@@ -82,6 +92,12 @@ class LinearReadoutBlock(torch.nn.Module):
 @simplify_if_compile
 @compile_mode("script")
 class NonLinearReadoutBlock(torch.nn.Module):
+    """
+    A non-linear readout block that applies a multi-layer perceptron (MLP)
+    with a gate activation function to the input irreducible representations (irreps),
+    followed by a linear transformation to a scalar output (0e).
+    Supports multiple heads for multi-task learning.
+    """
     def __init__(
         self,
         irreps_in: o3.Irreps,
@@ -116,6 +132,12 @@ class NonLinearReadoutBlock(torch.nn.Module):
 @simplify_if_compile
 @compile_mode("script")
 class NonLinearBiasReadoutBlock(torch.nn.Module):
+    """
+    A non-linear readout block similar to `NonLinearReadoutBlock`, but includes
+    biases in the intermediate linear layers (o3.Linear).
+    It applies an MLP with gate activation and biases for scalar output (0e).
+    Supports multiple heads for multi-task learning.
+    """
     def __init__(
         self,
         irreps_in: o3.Irreps,
@@ -153,6 +175,11 @@ class NonLinearBiasReadoutBlock(torch.nn.Module):
 
 @compile_mode("script")
 class LinearDipoleReadoutBlock(torch.nn.Module):
+    """
+    A linear readout block specifically designed for predicting dipole moments.
+    It transforms input irreps into either '1x1o' (for dipole only) or
+    '1x0e + 1x1o' (for combined scalar and dipole output).
+    """
     def __init__(
         self,
         irreps_in: o3.Irreps,
@@ -175,6 +202,11 @@ class LinearDipoleReadoutBlock(torch.nn.Module):
 
 @compile_mode("script")
 class NonLinearDipoleReadoutBlock(torch.nn.Module):
+    """
+    A non-linear readout block for predicting dipole moments, incorporating
+    a gated non-linearity. It transforms input irreps using an MLP-like structure
+    and an equivariant gate into '1x1o' (dipole only) or '1x0e + 1x1o'.
+    """
     def __init__(
         self,
         irreps_in: o3.Irreps,
@@ -221,6 +253,11 @@ class NonLinearDipoleReadoutBlock(torch.nn.Module):
 
 @compile_mode("script")
 class LinearDipolePolarReadoutBlock(torch.nn.Module):
+    """
+    A linear readout block designed for simultaneous prediction of dipole moments and polarizability.
+    It transforms input irreps into '2x0e + 1x1o + 1x2e' to capture scalar, dipole, and quadrupolar components.
+    Requires `use_polarizability` to be True.
+    """
     def __init__(
         self,
         irreps_in: o3.Irreps,
@@ -250,6 +287,11 @@ class LinearDipolePolarReadoutBlock(torch.nn.Module):
 
 @compile_mode("script")
 class NonLinearDipolePolarReadoutBlock(torch.nn.Module):
+    """
+    A non-linear readout block for simultaneous prediction of dipole moments and polarizability.
+    It uses an MLP-like structure with a gated non-linearity to transform input irreps
+    into '2x0e + 1x1o + 1x2e'. Requires `use_polarizability` to be True.
+    """
     def __init__(
         self,
         irreps_in: o3.Irreps,
@@ -301,6 +343,11 @@ class NonLinearDipolePolarReadoutBlock(torch.nn.Module):
 
 @compile_mode("script")
 class AtomicEnergiesBlock(torch.nn.Module):
+    """
+    A block that provides atomic energies for different elements.
+    It takes one-hot encoded atomic numbers and computes the total energy
+    based on pre-defined atomic energy values.
+    """
     atomic_energies: torch.Tensor
 
     def __init__(self, atomic_energies: Union[np.ndarray, torch.Tensor]):
@@ -329,6 +376,11 @@ class AtomicEnergiesBlock(torch.nn.Module):
 
 @compile_mode("script")
 class RadialEmbeddingBlock(torch.nn.Module):
+    """
+    Generates radial basis function embeddings for edge lengths, optionally applying
+    a distance transformation and a polynomial cutoff. Supports Bessel, Gaussian,
+    and Chebychev bases.
+    """
     def __init__(
         self,
         r_max: float,
@@ -359,8 +411,8 @@ class RadialEmbeddingBlock(torch.nn.Module):
         node_attrs: torch.Tensor,
         edge_index: torch.Tensor,
         atomic_numbers: torch.Tensor,
-    ):
-        cutoff = self.cutoff_fn(edge_lengths)  # [n_edges, 1]
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        envelope = self.cutoff_fn(edge_lengths)  # [n_edges, 1]
         if hasattr(self, "distance_transform"):
             edge_lengths = self.distance_transform(
                 edge_lengths, node_attrs, edge_index, atomic_numbers
@@ -368,12 +420,17 @@ class RadialEmbeddingBlock(torch.nn.Module):
         radial = self.bessel_fn(edge_lengths)  # [n_edges, n_basis]
         if hasattr(self, "apply_cutoff"):
             if not self.apply_cutoff:
-                return radial, cutoff
-        return radial * cutoff, None  # [n_edges, n_basis], [n_edges, 1]
+                return radial, envelope
+        return radial * envelope, None  # [n_edges, n_basis], [n_edges, 1]
 
 
 @compile_mode("script")
 class EquivariantProductBasisBlock(torch.nn.Module):
+    """
+    Applies symmetric contractions and a linear transformation to node features.
+    This block is used to combine information from different irreducible
+    representations (irreps) and can incorporate skip connections (sc).
+    """
     def __init__(
         self,
         node_feats_irreps: o3.Irreps,
@@ -451,6 +508,11 @@ class EquivariantProductBasisBlock(torch.nn.Module):
 
 @compile_mode("script")
 class InteractionBlock(torch.nn.Module):
+    """
+    Abstract base class for interaction blocks in an equivariant neural network.
+    These blocks are responsible for message passing between nodes based on their
+    features, attributes, and edge information.
+    """
     def __init__(
         self,
         node_attrs_irreps: o3.Irreps,
@@ -533,6 +595,12 @@ nonlinearities = {1: torch.nn.functional.silu, -1: torch.tanh}
 
 @compile_mode("script")
 class RealAgnosticInteractionBlock(InteractionBlock):
+    """
+    An interaction block that performs message passing without explicit
+    consideration of node attributes in the message construction beyond their use
+    in the skip connection. It uses a linear layer, tensor product, and MLP
+    for convolution weights.
+    """
     def _setup(self) -> None:
         if not hasattr(self, "cueq_config"):
             self.cueq_config = None
@@ -640,6 +708,11 @@ class RealAgnosticInteractionBlock(InteractionBlock):
 
 @compile_mode("script")
 class RealAgnosticResidualInteractionBlock(InteractionBlock):
+    """
+    An interaction block that incorporates a residual connection for stable training.
+    It combines message passing with a skip connection from the input node features
+    to the output.
+    """
     def _setup(self) -> None:
         if not hasattr(self, "cueq_config"):
             self.cueq_config = None
@@ -747,6 +820,11 @@ class RealAgnosticResidualInteractionBlock(InteractionBlock):
 
 @compile_mode("script")
 class RealAgnosticDensityInteractionBlock(InteractionBlock):
+    """
+    An interaction block that normalizes messages by a learned density.
+    This helps to stabilize training and improve performance, especially in systems
+    with varying densities.
+    """
     def _setup(self) -> None:
         if not hasattr(self, "cueq_config"):
             self.cueq_config = None
@@ -872,6 +950,11 @@ class RealAgnosticDensityInteractionBlock(InteractionBlock):
 
 @compile_mode("script")
 class RealAgnosticDensityResidualInteractionBlock(InteractionBlock):
+    """
+    Combines density-normalized message passing with a residual connection.
+    This block leverages the benefits of density-based normalization for messages
+    and residual connections for stable and effective learning.
+    """
     def _setup(self) -> None:
         if not hasattr(self, "cueq_config"):
             self.cueq_config = None
@@ -1000,6 +1083,11 @@ class RealAgnosticDensityResidualInteractionBlock(InteractionBlock):
 
 @compile_mode("script")
 class RealAgnosticAttResidualInteractionBlock(InteractionBlock):
+    """
+    An attention-based residual interaction block where convolution weights are
+    derived from a combination of edge features and (down-projected) node features
+    of both sender and receiver.
+    """
     def _setup(self) -> None:
         if not hasattr(self, "cueq_config"):
             self.cueq_config = None
@@ -1118,6 +1206,11 @@ class RealAgnosticAttResidualInteractionBlock(InteractionBlock):
 
 @compile_mode("script")
 class RealAgnosticResidualNonLinearInteractionBlock(InteractionBlock):
+    """
+    An interaction block that combines residual connections with a non-linear activation.
+    It includes source and target embeddings for edge feature augmentation and
+    density normalization.
+    """
     def _setup(self) -> None:
         if not hasattr(self, "cueq_config"):
             self.cueq_config = None
@@ -1322,6 +1415,11 @@ class RealAgnosticResidualNonLinearInteractionBlock(InteractionBlock):
 
 @compile_mode("script")
 class ScaleShiftBlock(torch.nn.Module):
+    """
+    Applies a learnable scale and shift to the input tensor.
+    This block is often used to normalize or denormalize outputs based on
+    pre-computed statistics, especially in multi-head setups.
+    """
     def __init__(self, scale: float, shift: float):
         super().__init__()
         self.register_buffer(

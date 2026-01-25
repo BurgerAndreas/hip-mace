@@ -26,7 +26,7 @@ Train HIP-MACE to overfit a small subset of 100 datapoints
 ```bash
 # with HIP
 uv run scripts/run_train.py --config=configs/horm_100.yaml --hip=true 
-# uv run scripts/run_train.py --config=configs/horm_100.yaml --hip=true --batch_size=4 --valid_batch_size=4 --eval_interval=1
+# uv run scripts/run_train.py --config=configs/horm_100.yaml --hip=true --batch_size=4 --valid_batch_size=4 --eval_interval=1 --wandb=False --save_checkpoints=False
 
 # without HIP (energy and forces)
 uv run scripts/run_train.py --config=configs/horm_100.yaml

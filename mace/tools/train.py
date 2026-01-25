@@ -191,6 +191,7 @@ def train(
     log_wandb: bool = False,
     distributed: bool = False,
     save_all_checkpoints: bool = False,
+    save_checkpoints: bool = True,
     plotter: TrainingPlotter = None,
     distributed_model: Optional[DistributedDataParallel] = None,
     train_sampler: Optional[DistributedSampler] = None,
@@ -385,7 +386,8 @@ def train(
                                 f"Stopping optimization after {patience_counter} epochs without improvement"
                             )
                             break
-                    if save_all_checkpoints:
+                    # Save checkpoint
+                    if save_checkpoints and save_all_checkpoints:
                         param_context = (
                             ema.average_parameters()
                             if ema is not None
@@ -398,18 +400,20 @@ def train(
                                 keep_last=True,
                             )
                 else:
+                    # Update lowest loss and reset patience counter
                     lowest_loss = valid_loss
                     patience_counter = 0
                     param_context = (
                         ema.average_parameters() if ema is not None else nullcontext()
                     )
-                    with param_context:
-                        checkpoint_handler.save(
-                            state=CheckpointState(model, optimizer, lr_scheduler),
-                            epochs=epoch,
-                            keep_last=keep_last,
-                        )
-                        keep_last = False or save_all_checkpoints
+                    if save_checkpoints:
+                        with param_context:
+                            checkpoint_handler.save(
+                                state=CheckpointState(model, optimizer, lr_scheduler),
+                                epochs=epoch,
+                                keep_last=keep_last,
+                            )
+                            keep_last = False or save_all_checkpoints
         if distributed:
             torch.distributed.barrier()
         epoch += 1

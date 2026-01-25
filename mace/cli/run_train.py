@@ -1069,6 +1069,7 @@ def run(args) -> Dict[str, Any]:
         logger=logger,
         patience=args.patience,
         save_all_checkpoints=args.save_all_checkpoints,
+        save_checkpoints=args.save_checkpoints,
         output_args=output_args,
         device=device,
         swa=swa,

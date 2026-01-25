@@ -61,12 +61,12 @@ def compute_neighbors(data, edge_index):
     
 def generate_graph(
     data,
-    cutoff=None,
+    r_max=None,
     use_pbc=None,
 ):
     if use_pbc:
         edge_index, cell_offsets, neighbors = radius_graph_pbc(
-            data, cutoff
+            data, r_max
         )
 
         out = get_pbc_distances(
@@ -86,7 +86,7 @@ def generate_graph(
     else:
         edge_index = radius_graph(
             data["positions"],
-            r=cutoff,
+            r=r_max,
             batch=data["batch"],
             max_num_neighbors=1_000_000,
         )
@@ -110,11 +110,11 @@ def generate_graph(
     )
 
 
-def generate_graph_nopbc(data, cutoff):
+def generate_graph_nopbc(data, r_max):
     """Simplified graph generation without periodic boundary conditions."""
     pos = data["positions"]
     edge_index = radius_graph(
-        pos, r=cutoff, batch=data["batch"], max_num_neighbors=1_000_000
+        pos, r=r_max, batch=data["batch"], max_num_neighbors=1_000_000
     )
     j, i = edge_index
     posj = pos[j]

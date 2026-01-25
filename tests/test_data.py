@@ -150,7 +150,7 @@ class TestNeighborhood:
             ]
         )
 
-        indices, shifts, unit_shifts, _ = get_neighborhood(positions, cutoff=1.5)
+        indices, shifts, unit_shifts, _ = get_neighborhood(positions, r_max=1.5)
         assert indices.shape == (2, 4)
         assert shifts.shape == (4, 3)
         assert unit_shifts.shape == (4, 3)
@@ -165,7 +165,7 @@ class TestNeighborhood:
 
         cell = np.array([[2.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
         edge_index, shifts, unit_shifts, _ = get_neighborhood(
-            positions, cutoff=3.5, pbc=(True, False, False), cell=cell
+            positions, r_max=3.5, pbc=(True, False, False), cell=cell
         )
         num_edges = 10
         assert edge_index.shape == (2, num_edges)
@@ -197,7 +197,7 @@ def test_half_periodic():
     assert all(atoms.pbc == (True, True, False))
     config = config_from_atoms(atoms)  # first shell dist is 2.864A
     edge_index, shifts, _, _ = get_neighborhood(
-        config.positions, cutoff=2.9, pbc=(True, True, False), cell=config.cell
+        config.positions, r_max=2.9, pbc=(True, True, False), cell=config.cell
     )
     sender, receiver = edge_index
     vectors = (

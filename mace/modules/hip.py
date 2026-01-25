@@ -373,7 +373,7 @@ def blocks3x3_to_hessian_loops(
 
 def add_hessian_graph_batch(
     data: TGBatch,
-    cutoff: float = 16.0,
+    hessian_r_max: float = 16.0,
     max_neighbors: int = 1_000_000,
     use_pbc: Optional[Tuple[bool, bool, bool]] = None,
 ) -> TGBatch:
@@ -415,7 +415,7 @@ def add_hessian_graph_batch(
             neighbors_hessian,
         ) = generate_graph(
             data,
-            cutoff=cutoff,
+            r_max=hessian_r_max,
             use_pbc=use_pbc,
         )
         
@@ -443,7 +443,7 @@ def add_hessian_graph_batch(
             # Get neighbors for this isolated graph
             edge_index_b, shifts_b, _, _ = get_neighborhood(
                 positions=pos_b, 
-                cutoff=cutoff, 
+                r_max=hessian_r_max, 
                 pbc=use_pbc, 
                 cell=None
             )
@@ -592,7 +592,7 @@ if __name__ == "__main__":
             neighbors_hessian,
         ) = generate_graph(
             data,
-            cutoff=100.0,
+            r_max=100.0,
             max_neighbors=32,
         )
 

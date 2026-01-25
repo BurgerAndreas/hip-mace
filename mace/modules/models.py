@@ -93,6 +93,8 @@ class MACE(torch.nn.Module):
         hessian_radial_MLP: Optional[List[int]] = None,  # Radial MLP architecture for separate network
         hessian_use_edge_gates: bool = False,  # Add equivariant gating on off-diagonal features
         num_interactions_hessian: int = 0,  # Number of additional interaction layers for Hessian prediction
+        hessian_diag_norm: bool = False,
+        hessian_off_diag_norm: bool = False,
     ):
         super().__init__()
         self.register_buffer(
@@ -343,6 +345,14 @@ class MACE(torch.nn.Module):
             self.hessian_message_passing_layer = hessian_message_passing_layer
             self.hessian_separate_radial_network = hessian_separate_radial_network
             self.hessian_use_edge_gates = hessian_use_edge_gates
+            self.hessian_diag_norm = hessian_diag_norm
+            self.hessian_off_diag_norm = hessian_off_diag_norm
+
+            if self.hessian_diag_norm:
+                self.hessian_diag_norm_layer = nn.LayerNorm(hessian_out_irreps)
+            
+            if self.hessian_off_diag_norm:
+                self.hessian_off_diag_norm_layer = nn.LayerNorm(hessian_out_irreps)
             
             # Separate radial network for Hessian (if enabled)
             if hessian_separate_radial_network:
@@ -513,7 +523,7 @@ class MACE(torch.nn.Module):
         # Embeddings
         node_feats = self.node_embedding(data["node_attrs"])
         edge_attrs = self.spherical_harmonics(vectors)
-        edge_feats, cutoff = self.radial_embedding(
+        edge_feats, envelope = self.radial_embedding(
             lengths, data["node_attrs"], data["edge_index"], self.atomic_numbers
         )
         if hasattr(self, "pair_repulsion"):
@@ -570,7 +580,7 @@ class MACE(torch.nn.Module):
                 edge_attrs=edge_attrs, # [E, L]
                 edge_feats=edge_feats, # [E, Bessel]
                 edge_index=data["edge_index"], # [2, E]
-                cutoff=cutoff,
+                cutoff=envelope,
                 first_layer=(i == 0),
                 lammps_class=lammps_class,
                 lammps_natoms=lammps_natoms,
@@ -627,7 +637,7 @@ class MACE(torch.nn.Module):
 
         if predict_hessian:
             hessian = self._predict_hessian_hip(
-                data, node_feats_list, edge_attrs, edge_feats, cutoff
+                data, node_feats_list, edge_attrs, edge_feats, envelope
             )
 
         return {
@@ -653,7 +663,7 @@ class MACE(torch.nn.Module):
         edge_attrs: torch.Tensor,
         edge_feats: torch.Tensor,
         edge_index: torch.Tensor,
-        cutoff: Optional[torch.Tensor] = None,
+        envelope: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Extract per-edge messages from an interaction block before aggregation.
         
@@ -666,7 +676,7 @@ class MACE(torch.nn.Module):
             edge_attrs=edge_attrs,
             edge_feats=edge_feats,
             edge_index=edge_index,
-            cutoff=cutoff,
+            cutoff=envelope,
             return_raw_messages=True,
         )
         if isinstance(result, tuple):
@@ -680,14 +690,14 @@ class MACE(torch.nn.Module):
         node_feats_list,
         edge_attrs,
         edge_feats,
-        cutoff,
+        envelope: torch.Tensor,
     ) -> torch.Tensor:
         """Predict Hessian from l=0,1,2 features."""
         # Compute the graph for the Hessian
         # Usually the graph is computed in AtomicData.__init__()
         data = add_hessian_graph_batch(
             data,
-            cutoff=self.hessian_r_max.item(),
+            hessian_r_max=self.hessian_r_max.item(),
             # max_neighbors=self.max_neighbors,
             # use_pbc=data["pbc"][-1] if len(data["pbc"]) > 3 else data["pbc"],
             use_pbc=None,
@@ -722,20 +732,20 @@ class MACE(torch.nn.Module):
                 edge_lengths_hessian = edge_lengths_hessian.unsqueeze(-1)
             # Use separate radial network if enabled, otherwise use shared one
             if self.hessian_separate_radial_network:
-                edge_feats_hessian, _ = self.hessian_radial_embedding(
+                edge_feats_hessian, envelope_hessian = self.hessian_radial_embedding(
                     edge_lengths_hessian,
                     data["node_attrs"],
                     edge_index_hessian,
                     self.atomic_numbers
                 )
             else:
-                edge_feats_hessian, _ = self.radial_embedding(
+                edge_feats_hessian, envelope_hessian = self.radial_embedding(
                     edge_lengths_hessian,
                     data["node_attrs"],
                     edge_index_hessian,
                     self.atomic_numbers
                 )
-        
+                
         # Normalized edge vectors for directional encoding (if enabled)
         edge_vec_normalized_sh = None
 
@@ -744,16 +754,30 @@ class MACE(torch.nn.Module):
         if self.num_interactions_hessian > 0:
             # Start with the last node features from the main backbone
             node_feats_hessian = node_feats_list[-1]
+            
+            use_main_graph_for_hessian_interaction = False
+            if use_main_graph_for_hessian_interaction:
+                _node_attrs = data["node_attrs"]
+                _edge_attrs = edge_attrs
+                _edge_feats = edge_feats
+                _edge_index = data["edge_index"]
+                _envelope = envelope
+            else:
+                _node_attrs = data["node_attrs"]
+                _edge_attrs = edge_attrs_hessian
+                _edge_feats = edge_feats_hessian
+                _edge_index = edge_index_hessian
+                _envelope = envelope_hessian
 
             # Run Hessian-specific interaction layers on the main graph
             for interaction, product in zip(self.hessian_interactions, self.hessian_products):
                 node_feats_hessian, sc = interaction(
-                    node_attrs=data["node_attrs"],
+                    node_attrs=_node_attrs,
                     node_feats=node_feats_hessian,
-                    edge_attrs=edge_attrs,  # Use main graph edge attributes
-                    edge_feats=edge_feats,  # Use main graph edge features
-                    edge_index=data["edge_index"],  # Use main graph
-                    cutoff=cutoff,  # Use main graph cutoff
+                    edge_attrs=_edge_attrs,  
+                    edge_feats=_edge_feats,  
+                    edge_index=_edge_index,  
+                    cutoff=_envelope,  
                 )
                 node_feats_hessian = product(
                     node_feats=node_feats_hessian,
@@ -788,7 +812,7 @@ class MACE(torch.nn.Module):
                     edge_attrs=edge_attrs_hessian,
                     edge_feats=edge_feats_hessian,
                     edge_index=edge_index_hessian,
-                    cutoff=None,  # Cutoff already applied in radial embedding if needed
+                    envelope=envelope_hessian, 
                 )
                 # [n_edges, irreps_mid]
                 
@@ -825,6 +849,12 @@ class MACE(torch.nn.Module):
             # [E, out_irreps]
             off_diag_out = off_diag_stacked.mean(dim=0)
         
+        if self.hessian_diag_norm:
+            diag_out = self.hessian_diag_norm_layer(diag_out)
+
+        if self.hessian_off_diag_norm:
+            off_diag_out = self.hessian_off_diag_norm_layer(off_diag_out)
+
         # o3.Linear layer to project node_feats
         # onto the target irreps 1x0e + 1x1e + 1x2e = 9
         # Apply the linear projection to both diagonal and off-diagonal features
@@ -944,7 +974,7 @@ class ScaleShiftMACE(MACE):
         # [E, D2]
         edge_attrs = self.spherical_harmonics(vectors)
         # [E, D3], None 
-        edge_feats, cutoff = self.radial_embedding(
+        edge_feats, envelope = self.radial_embedding(
             lengths, data["node_attrs"], data["edge_index"], self.atomic_numbers
         )
 
@@ -997,7 +1027,7 @@ class ScaleShiftMACE(MACE):
                 edge_attrs=edge_attrs,
                 edge_feats=edge_feats,
                 edge_index=data["edge_index"],
-                cutoff=cutoff,
+                cutoff=envelope,
                 first_layer=(i == 0),
                 lammps_class=lammps_class,
                 lammps_natoms=lammps_natoms,
@@ -1056,7 +1086,7 @@ class ScaleShiftMACE(MACE):
         
         if predict_hessian:
             hessian = self._predict_hessian_hip(
-                data, node_feats_list, edge_attrs, edge_feats, cutoff
+                data, node_feats_list, edge_attrs, edge_feats, envelope
             )
 
         return {
@@ -1241,7 +1271,7 @@ class AtomicDipolesMACE(torch.nn.Module):
             shifts=data["shifts"],
         )
         edge_attrs = self.spherical_harmonics(vectors)
-        edge_feats, cutoff = self.radial_embedding(
+        edge_feats, envelope = self.radial_embedding(
             lengths, data["node_attrs"], data["edge_index"], self.atomic_numbers
         )
 
@@ -1256,7 +1286,7 @@ class AtomicDipolesMACE(torch.nn.Module):
                 edge_attrs=edge_attrs,
                 edge_feats=edge_feats,
                 edge_index=data["edge_index"],
-                cutoff=cutoff,
+                cutoff=envelope,
             )
             node_feats = product(
                 node_feats=node_feats,
@@ -1805,7 +1835,7 @@ class EnergyDipolesMACE(torch.nn.Module):
             shifts=data["shifts"],
         )
         edge_attrs = self.spherical_harmonics(vectors)
-        edge_feats, cutoff = self.radial_embedding(
+        edge_feats, envelope = self.radial_embedding(
             lengths, data["node_attrs"], data["edge_index"], self.atomic_numbers
         )
 
@@ -1822,7 +1852,7 @@ class EnergyDipolesMACE(torch.nn.Module):
                 edge_attrs=edge_attrs,
                 edge_feats=edge_feats,
                 edge_index=data["edge_index"],
-                cutoff=cutoff,
+                cutoff=envelope,
             )
             node_feats = product(
                 node_feats=node_feats,

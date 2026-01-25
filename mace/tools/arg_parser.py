@@ -329,6 +329,18 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=True,
     )
     parser.add_argument(
+        "--hessian_diag_norm",
+        help="Use equivariant layer norm for diagonal features in HIP Hessian",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
+        "--hessian_off_diag_norm",
+        help="Use equivariant layer norm for off-diagonal features in HIP Hessian",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
         "--hessian_radial_MLP",
         help="Radial MLP architecture for Hessian (as Python list, e.g. '[64,64,64]')",
         type=str,
@@ -1017,6 +1029,12 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         help="Stop each training epoch after this many samples (None uses full epoch)",
         type=int,
         default=None,
+    )
+    parser.add_argument(
+        "--save_checkpoints",
+        help="save checkpoints",
+        type=str2bool,
+        default=True,
     )
     parser.add_argument(
         "--keep_checkpoints",

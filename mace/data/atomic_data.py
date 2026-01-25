@@ -162,7 +162,7 @@ class AtomicData(torch_geometric.data.Data):
             heads = ["Default"]
         edge_index, shifts, unit_shifts, cell = get_neighborhood(
             positions=config.positions,
-            cutoff=cutoff,
+            r_max=cutoff,
             pbc=deepcopy(config.pbc),
             cell=deepcopy(config.cell),
         )

@@ -6,7 +6,7 @@ from matscipy.neighbours import neighbour_list
 
 def get_neighborhood(
     positions: np.ndarray,  # [num_positions, 3]
-    cutoff: float,
+    r_max: float,
     pbc: Optional[Tuple[bool, bool, bool]] = None,
     cell: Optional[np.ndarray] = None,  # [3, 3]
     true_self_interaction=False,
@@ -16,7 +16,7 @@ def get_neighborhood(
     
     Args:
         positions (np.ndarray): Array of atomic positions of shape [num_positions, 3].
-        cutoff (float): Cutoff distance for neighbor search.
+        r_max (float): Cutoff distance for neighbor search.
         pbc (Optional[Tuple[bool, bool, bool]]): Tuple of booleans specifying which directions are periodic.
             Defaults to (False, False, False) if not provided.
         cell (Optional[np.ndarray]): Simulation cell as a (3, 3) matrix. If None or all zeros, replaced by identity.
@@ -49,11 +49,11 @@ def get_neighborhood(
     # For models with more than 5 layers, the multiplicative constant needs to be increased.
     # temp_cell = np.copy(cell)
     if not pbc_x:
-        cell[0, :] = max_positions * 5 * cutoff * identity[0, :]
+        cell[0, :] = max_positions * 5 * r_max * identity[0, :]
     if not pbc_y:
-        cell[1, :] = max_positions * 5 * cutoff * identity[1, :]
+        cell[1, :] = max_positions * 5 * r_max * identity[1, :]
     if not pbc_z:
-        cell[2, :] = max_positions * 5 * cutoff * identity[2, :]
+        cell[2, :] = max_positions * 5 * r_max * identity[2, :]
 
     sender, receiver, unit_shifts = neighbour_list(
         # i : first atom index - j : second atom index 
@@ -63,7 +63,7 @@ def get_neighborhood(
         pbc=pbc,
         cell=cell,
         positions=positions,
-        cutoff=float(cutoff),
+        cutoff=float(r_max),
         # self_interaction=True,  # we want edges from atom to itself in different periodic images
         # use_scaled_positions=False,  # positions are not scaled positions
     )
