@@ -194,9 +194,7 @@ def configure_model(
             hessian_r_max=args.hessian_r_max,
             hessian_edge_lmax=args.hessian_edge_lmax,
             hessian_use_radial=args.hessian_use_radial,
-            hessian_use_both_nodes=args.hessian_use_both_nodes,
             hessian_aggregation=args.hessian_aggregation,
-            hessian_edge_feature_method=args.hessian_edge_feature_method,
             hessian_message_passing_layer=args.hessian_message_passing_layer,
             num_interactions_hessian=args.num_interactions_hessian,
         )

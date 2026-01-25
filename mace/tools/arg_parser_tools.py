@@ -51,7 +51,12 @@ def check_args(args):
     # Store command line arguments as a string
     CMD_LINE_ARGS = " ".join(sys.argv)
     if not args.wandb_name or args.wandb_name == "":
-        args.wandb_name = CMD_LINE_ARGS.replace("scripts/run_train.py", "").replace("--", "").replace("config=configs/horm_t1x.yaml", "")
+        args_list = CMD_LINE_ARGS.split(" ")
+        skip_list = [".py", "config="]
+        for skip in skip_list:
+            args_list = [arg for arg in args_list if skip not in arg]
+        args_str = " ".join(args_list)
+        args.wandb_name = args_str.replace("=True", "").replace("True", "").replace("--", "")
     
     # save training config to a yaml file
     args_dict = args_to_dict(args)

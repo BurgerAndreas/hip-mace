@@ -153,7 +153,7 @@ def data_to_configuration(data, head_name: str = "Default") -> Optional[Configur
 def run_conversion(
     input_path: str,
     h5_prefix: str,
-    r_max = 5.0
+    r_max: float
 ):
     if not os.path.exists(input_path):
         # look in default cache location
@@ -194,13 +194,13 @@ def run_conversion(
     with h5py.File(out_path, "w") as f:
         save_configurations_as_HDF5(list(configs), 0, f)
 
-    print(f"Wrote {len(configs)} configurations")
+    print(f"Wrote {len(configs)} configurations.")
     
 
     # Compute dataset statistics (average neighbors, mean per-atom energies, RMS of forces)
     # Create a DataLoader over the newly written HDF5 file to compute graph-based stats
     # Construct z_table from GLOBAL_ATOM_NUMBERS and set a default cutoff r_max
-    print("\nComputing dataset statistics")
+    print("\nComputing dataset statistics with r_max={r_max}")
     z_list = GLOBAL_ATOM_NUMBERS.tolist()
     z_table = AtomicNumberTable(z_list)
     h5_dataset = HDF5Dataset(out_path, r_max=r_max, z_table=z_table)
@@ -270,8 +270,9 @@ def main():
     # ]
     parser.add_argument("--in_file", required=True)
     parser.add_argument("--h5_prefix", default=None, help="Output HDF5 prefix (directory or .h5 file)")
+    parser.add_argument("--r_max", default=5.0, type=float, help="Cutoff radius for computing statistics.")
     args = parser.parse_args()
-    run_conversion(args.in_file, args.h5_prefix)
+    run_conversion(args.in_file, args.h5_prefix, args.r_max)
 
 
 if __name__ == "__main__":

@@ -265,6 +265,12 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--num_interactions", help="number of interactions", type=int, default=2
     )
+    parser.add_argument(
+        "--use_layer_norm",
+        help="Apply equivariant layer normalization after each interaction layer",
+        type=str2bool,
+        default=False,
+    )
 
     # HIP / Hessian prediction options (match to models.py lines 83–97)
     parser.add_argument(
@@ -304,24 +310,11 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=True,
     )
     parser.add_argument(
-        "--hessian_use_both_nodes",
-        help="Use both h_i and h_j for Hessian edge features (False=only h_j)",
-        type=str2bool,
-        default=True,
-    )
-    parser.add_argument(
         "--hessian_aggregation",
         help="Aggregation method for combining layer features: 'mean', 'learnable'",
         type=str,
         default="learnable",
         choices=["mean", "learnable"],
-    )
-    parser.add_argument(
-        "--hessian_edge_feature_method",
-        help='Method for Hessian edge features: "edge_tp", "message_passing"',
-        type=str,
-        default="message_passing",
-        choices=["edge_tp", "message_passing"],
     )
     parser.add_argument(
         "--hessian_message_passing_layer",
@@ -330,16 +323,10 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=None,
     )
     parser.add_argument(
-        "--hessian_use_directional_encoding",
-        help="Include normalized edge vector r_ij in Hessian edge tensor product",
-        type=str2bool,
-        default=False,
-    )
-    parser.add_argument(
         "--hessian_separate_radial_network",
         help="Use a separate radial network (MLP) for Hessian (not shared with energy)",
         type=str2bool,
-        default=False,
+        default=True,
     )
     parser.add_argument(
         "--hessian_radial_MLP",

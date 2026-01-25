@@ -36,6 +36,7 @@ dependencies = [
     "einops",
     "wandb",
     "muon-optimizer @ git+https://github.com/KellerJordan/Muon",
+    "pytest",
 ]
 
 # Make isort compatible with black
