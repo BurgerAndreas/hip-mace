@@ -626,8 +626,19 @@ def run(args) -> Dict[str, Any]:
     # Initialize device first
     device = tools.init_device(args.device)
 
+    requested_lowp_dtype = None
+    if args.default_dtype in ["bfloat16", "float16"]:
+        requested_lowp_dtype = args.default_dtype
+        logging.warning(
+            "default_dtype=%s makes model parameters low precision and can hurt accuracy. "
+            "Keeping parameters in float32 and using AMP %s instead.",
+            args.default_dtype,
+            args.default_dtype,
+        )
+        args.default_dtype = "float32"
+
     # Check bfloat16 support if requested
-    if args.default_dtype == "bfloat16":
+    if requested_lowp_dtype == "bfloat16":
         if tools.check_bfloat16_support(device):
             if args.distributed:
                 # In distributed mode, check all GPUs
@@ -674,12 +685,20 @@ def run(args) -> Dict[str, Any]:
 
     # Auto-detect AMP if not explicitly set
     if args.amp is None:
-        args.amp = args.default_dtype in ["bfloat16", "float16"]
+        args.amp = requested_lowp_dtype is not None
+    elif requested_lowp_dtype is not None and args.amp is False:
+        logging.warning(
+            "default_dtype was %s but AMP was disabled; training will run in float32.",
+            requested_lowp_dtype,
+        )
 
     if args.amp:
         # Determine AMP dtype (auto-detection or explicit)
         if args.amp_dtype == "auto":
-            amp_dtype = torch.bfloat16 if args.default_dtype == "bfloat16" else torch.float16
+            if requested_lowp_dtype == "bfloat16":
+                amp_dtype = torch.bfloat16
+            else:
+                amp_dtype = torch.float16
         else:
             amp_dtype = torch.bfloat16 if args.amp_dtype == "bfloat16" else torch.float16
 

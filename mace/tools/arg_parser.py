@@ -70,7 +70,10 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--default_dtype",
-        help="set default dtype",
+        help=(
+            "set default dtype for model parameters (bfloat16/float16 are treated as AMP compute "
+            "dtypes and keep parameters in float32)"
+        ),
         type=str,
         choices=["float32", "float64", "bfloat16", "float16"],
         default="float64",
