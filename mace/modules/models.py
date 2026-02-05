@@ -292,27 +292,6 @@ class MACE(torch.nn.Module):
             "hessian_r_max", torch.tensor(hessian_r_max, dtype=torch.get_default_dtype())
         )
         if self.hip:
-            # consider adding one full layer here
-            # hessian_hidden_irreps = o3.Irreps("64x0e + 64x1o + 64x2e")
-            # self.hessian_interaction = interaction_cls(
-            #     node_attrs_irreps=node_attr_irreps,
-            #     node_feats_irreps=hidden_irreps,
-            #     edge_attrs_irreps=sh_irreps,
-            #     edge_feats_irreps=edge_feats_irreps,
-            #     target_irreps=interaction_irreps,
-            #     hidden_irreps=hessian_hidden_irreps,
-            #     avg_num_neighbors=avg_num_neighbors,
-            #     edge_irreps=edge_irreps,
-            #     radial_MLP=radial_MLP,
-            #     cueq_config=cueq_config,
-            #     oeq_config=oeq_config,
-            # )
-            # prod = EquivariantProductBasisBlock(
-            #     node_feats_irreps=interaction_irreps,
-            #     target_irreps=hessian_hidden_irreps, 
-            #     # ...
-            # )
-            
             assert hidden_irreps.count(o3.Irrep(2, 1)) > 0, \
                 f"Hessian requires 2e in hidden_irreps but got {hidden_irreps}. Try adding e.g. '+ 64x2e' to hidden_irreps."
             # The Hessian is an Even Parity object, 

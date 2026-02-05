@@ -377,7 +377,7 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         "--hessian_hidden_irreps",
         help="Optional irreps for Hessian-only interaction layers (overrides backbone hidden_irreps for num_interactions_hessian)",
         type=str,
-        default=None,
+        default="64x0e + 64x1e + 64x1o + 64x2e",
     )
 
     parser.add_argument(
