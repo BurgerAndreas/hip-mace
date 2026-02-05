@@ -894,8 +894,6 @@ def run(args) -> Dict[str, Any]:
             except Exception as e:
                 logging.warning(f"Failed to delete old .model file {old_model}: {e}")
 
-        logging.info(f"Saving .model file to {model_path}")
-
         # Create a copy of the model for saving
         model_to_save = deepcopy(model_to_checkpoint)
 

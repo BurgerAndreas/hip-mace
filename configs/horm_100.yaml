@@ -75,7 +75,7 @@ weight_decay: 0.0
 amsgrad: true
 scheduler: ReduceLROnPlateau # CosineAnnealingLR
 lr_factor: 0.8
-scheduler_patience: 300
+scheduler_patience: 1000
 lr_scheduler_gamma: 0.9993
 warmup_epochs: 100
 min_lr: 0.0001

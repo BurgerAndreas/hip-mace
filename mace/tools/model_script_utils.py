@@ -159,6 +159,16 @@ def configure_model(
 
         logging.info(f"Hidden irreps: {args.hidden_irreps}")
 
+        # Check if HIP is enabled and backbone has no 1e features
+        if args.hip:
+            hidden_irreps_parsed = o3.Irreps(args.hidden_irreps)
+            has_1e = any(irrep.ir.l == 1 and irrep.ir.p == 1 for irrep in hidden_irreps_parsed)
+            if not has_1e:
+                assert args.hessian_offdiag_use_tensor_product, (
+                    "When HIP is enabled and backbone has no 1e features, "
+                    "hessian_offdiag_use_tensor_product must be True to enable learning 1e contributions"
+                )
+
         cueq_config = None
         if args.only_cueq:
             logging.info("Using only the backend of the model")
