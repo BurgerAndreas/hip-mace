@@ -163,10 +163,20 @@ def configure_model(
         if args.hip:
             hidden_irreps_parsed = o3.Irreps(args.hidden_irreps)
             has_1e = any(irrep.ir.l == 1 and irrep.ir.p == 1 for irrep in hidden_irreps_parsed)
-            if not has_1e:
-                assert args.hessian_offdiag_use_tensor_product, (
+            hessian_has_1e = False
+            if args.hessian_hidden_irreps:
+                hessian_irreps_parsed = o3.Irreps(args.hessian_hidden_irreps)
+                hessian_has_1e = any(
+                    irrep.ir.l == 1 and irrep.ir.p == 1 for irrep in hessian_irreps_parsed
+                )
+            if not has_1e and not hessian_has_1e:
+                assert (
+                    args.hessian_offdiag_use_tensor_product
+                    or args.hessian_offdiag_use_tensor_product_l2
+                ), (
                     "When HIP is enabled and backbone has no 1e features, "
-                    "hessian_offdiag_use_tensor_product must be True to enable learning 1e contributions"
+                    "enable a tensor-product path (hessian_offdiag_use_tensor_product or "
+                    "hessian_offdiag_use_tensor_product_l2) or provide 1e in hessian_hidden_irreps"
                 )
 
         cueq_config = None
@@ -207,7 +217,9 @@ def configure_model(
             hessian_aggregation=args.hessian_aggregation,
             hessian_message_passing_layer=args.hessian_message_passing_layer,
             hessian_offdiag_use_tensor_product=args.hessian_offdiag_use_tensor_product,
+            hessian_offdiag_use_tensor_product_l2=args.hessian_offdiag_use_tensor_product_l2,
             num_interactions_hessian=args.num_interactions_hessian,
+            hessian_hidden_irreps=o3.Irreps(args.hessian_hidden_irreps) if args.hessian_hidden_irreps else None,
             hessian_diag_norm=args.hessian_diag_norm,
             hessian_off_diag_norm=args.hessian_off_diag_norm,
         )
