@@ -42,6 +42,7 @@ from .utils import (
     prepare_graph,
 )
 from .hip import add_hessian_graph_batch, blocks3x3_to_hessian, irreps_to_cartesian_matrix
+from .wrapper_ops import FullyConnectedTensorProduct
 
 
 @compile_mode("script")
@@ -92,6 +93,7 @@ class MACE(torch.nn.Module):
         hessian_separate_radial_network: bool = False,  # Use dedicated radial MLP for Hessian (not shared with energy)
         hessian_radial_MLP: Optional[List[int]] = None,  # Radial MLP architecture for separate network
         hessian_use_edge_gates: bool = False,  # Add equivariant gating on off-diagonal features
+        hessian_offdiag_use_tensor_product: bool = False,  # Generate 0e/1e/2e via 1o ⊗ 1o path
         num_interactions_hessian: int = 0,  # Number of additional interaction layers for Hessian prediction
         hessian_diag_norm: bool = False,
         hessian_off_diag_norm: bool = False,
@@ -347,6 +349,7 @@ class MACE(torch.nn.Module):
             self.hessian_use_edge_gates = hessian_use_edge_gates
             self.hessian_diag_norm = hessian_diag_norm
             self.hessian_off_diag_norm = hessian_off_diag_norm
+            self.hessian_offdiag_use_tensor_product = hessian_offdiag_use_tensor_product
 
             if self.hessian_diag_norm:
                 self.hessian_diag_norm_layer = nn.LayerNorm(hessian_out_irreps)
@@ -433,6 +436,32 @@ class MACE(torch.nn.Module):
                 irreps_in=hidden_irreps,
                 irreps_out=hessian_out_irreps
             )
+
+            # Optional: parity-correct tensor-product path for off-diagonal features.
+            # This can generate the 1e channel even if the backbone does not contain 1e.
+            # We use: (node 1o) ⊗ (edge 1o) -> (0e + 1e + 2e)
+            if self.hessian_offdiag_use_tensor_product:
+                node_vec_irreps = o3.Irreps(f"{hessian_feature_dim}x1o")
+                edge_vec_irreps = o3.Irreps("1x1o")
+                self.hessian_tp_node_vec = o3.Linear(hidden_irreps, node_vec_irreps)
+                # Use lmax=1 harmonics and slice out the 1o part for the TP input.
+                self.hessian_spherical_harmonics_l1 = o3.SphericalHarmonics(
+                    o3.Irreps.spherical_harmonics(1),
+                    normalize=True,
+                    normalization="component",
+                )
+                self.hessian_offdiag_tp = FullyConnectedTensorProduct(
+                    irreps_in1=node_vec_irreps,
+                    irreps_in2=edge_vec_irreps,
+                    irreps_out=hessian_out_irreps,
+                    cueq_config=cueq_config,
+                )
+                # Optional scalar gate from radial edge features (distance/species dependent)
+                self.hessian_offdiag_tp_gate = None
+                if self.hessian_use_radial:
+                    self.hessian_offdiag_tp_gate = torch.nn.Linear(
+                        hessian_radial_dim, hessian_feature_dim
+                    )
 
             # Additional interaction layers for Hessian (if num_interactions_hessian > 0)
             # These layers use the main graph to further refine node features before Hessian extraction
@@ -823,6 +852,24 @@ class MACE(torch.nn.Module):
                 # Project raw messages to hessian output irreps
                 off_diag_feats = self.hessian_message_proj(raw_messages)
                 
+                # Optional tensor-product path: (node 1o) ⊗ (edge 1o) -> (0e + 1e + 2e)
+                if self.hessian_offdiag_use_tensor_product:
+                    sender = edge_index_hessian[0]
+                    node_vec = self.hessian_tp_node_vec(node_feats)  # [N, hfd x 1o]
+                    # SH up to l=1 gives [0e, 1o]; slice out the 1o part (3 components)
+                    edge_attrs_l1_full = self.hessian_spherical_harmonics_l1(
+                        edge_distance_vec_hessian.to(node_feats.dtype)
+                    )
+                    edge_vec_l1 = edge_attrs_l1_full[:, 1:4]  # [E, 3] = 1x1o
+                    tp_feats = self.hessian_offdiag_tp(node_vec[sender], edge_vec_l1)
+                    # Gate TP features with distance/species-dependent scalar weights (if available)
+                    if self.hessian_offdiag_tp_gate is not None and edge_feats_hessian is not None:
+                        gate = self.hessian_offdiag_tp_gate(edge_feats_hessian)  # [E, hfd]
+                        # hessian_out_irreps == hfd x (0e + 1e + 2e) => 9 * hfd components
+                        tp_feats = tp_feats.view(tp_feats.shape[0], -1, 9) * gate.unsqueeze(-1)
+                        tp_feats = tp_feats.view(tp_feats.shape[0], -1)
+                    off_diag_feats = off_diag_feats + tp_feats
+
                 # Apply edge-level gates for non-linearity (if enabled)
                 if self.hessian_use_edge_gates:
                     off_diag_feats = self.hessian_edge_gate(off_diag_feats)

@@ -353,6 +353,12 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=False,
     )
     parser.add_argument(
+        "--hessian_offdiag_use_tensor_product",
+        help="Add a parity-correct (node 1o) ⊗ (edge 1o) tensor-product path for off-diagonal HIP Hessian features (enables learning 1e even if backbone has no 1e)",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
         "--num_interactions_hessian",
         help="Number of additional interaction layers for Hessian prediction (0 = use main backbone features directly)",
         type=int,

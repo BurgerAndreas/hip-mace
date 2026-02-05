@@ -196,6 +196,7 @@ def configure_model(
             hessian_use_radial=args.hessian_use_radial,
             hessian_aggregation=args.hessian_aggregation,
             hessian_message_passing_layer=args.hessian_message_passing_layer,
+            hessian_offdiag_use_tensor_product=args.hessian_offdiag_use_tensor_product,
             num_interactions_hessian=args.num_interactions_hessian,
             hessian_diag_norm=args.hessian_diag_norm,
             hessian_off_diag_norm=args.hessian_off_diag_norm,
