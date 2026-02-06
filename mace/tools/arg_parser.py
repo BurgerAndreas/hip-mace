@@ -365,7 +365,7 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         "--hessian_offdiag_use_tensor_product_l2",
         help="Add a (node 2e) ⊗ (edge 2e) tensor-product path for off-diagonal HIP Hessian features (adds 1e mixing)",
         type=str2bool,
-        default=False,
+        default=True,
     )
     parser.add_argument(
         "--num_interactions_hessian",
