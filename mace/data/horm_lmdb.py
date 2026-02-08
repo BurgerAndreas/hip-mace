@@ -138,11 +138,11 @@ if __name__ == "__main__":
     import os
 
     dataset_dir = os.path.expanduser(
-        "~/.cache/kagglehub/datasets/yunhonghan/hessian-dataset-for-optimizing-reactive-mliphorm/versions/5/"
+        "~/.cache/kagglehub/datasets/yunhonghan/hessian-dataset-for-optimizing-reactive-mliphorm/versions/6/"
     )
     dataset_files = [
         "ts1x-val.lmdb",
-        "ts1x_hess_train_big.lmdb",
+        "ts1x_hess_train.lmdb",
         "RGD1.lmdb",
     ]
     lmdb_path = os.path.join(dataset_dir, dataset_files[0])

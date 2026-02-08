@@ -157,11 +157,21 @@ def run_conversion(
 ):
     if not os.path.exists(input_path):
         # look in default cache location
-        dataset_dir = os.path.expanduser(
-            "~/.cache/kagglehub/datasets/yunhonghan/hessian-dataset-for-optimizing-reactive-mliphorm/versions/5/"
+        base_dir = os.path.expanduser(
+            "~/.cache/kagglehub/datasets/yunhonghan/hessian-dataset-for-optimizing-reactive-mliphorm/"
         )
-        if os.path.exists(os.path.join(dataset_dir, input_path)):
-            input_path = os.path.join(dataset_dir, input_path)
+        # Find the latest version directory
+        versions_dir = os.path.join(base_dir, "versions")
+        if os.path.isdir(versions_dir):
+            version_nums = sorted(
+                (int(v) for v in os.listdir(versions_dir) if v.isdigit()),
+                reverse=True,
+            )
+            for v in version_nums:
+                candidate = os.path.join(versions_dir, str(v), input_path)
+                if os.path.exists(candidate):
+                    input_path = candidate
+                    break
     
     # Prepare output path: if h5_prefix ends with .h5 use it, else create directory
     if h5_prefix is None:
@@ -265,7 +275,7 @@ def main():
     parser = argparse.ArgumentParser()
     # dataset_files = [
     #     "ts1x-val.lmdb",
-    #     "ts1x_hess_train_big.lmdb",
+    #     "ts1x_hess_train.lmdb",
     #     "RGD1.lmdb",
     # ]
     parser.add_argument("--in_file", required=True)
