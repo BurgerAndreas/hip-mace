@@ -11,6 +11,7 @@ import numpy as np
 import torch
 import torch.utils.data
 from scipy.constants import c, e
+from tqdm import tqdm
 
 from mace.tools import to_numpy
 from mace.tools.scatter import scatter_mean, scatter_std, scatter_sum
@@ -444,7 +445,7 @@ def compute_statistics(
     head_list = []
     head_batch = []
 
-    for batch in data_loader:
+    for batch in tqdm(data_loader, desc="Computing statistics"):
         head = batch.head
         node_e0 = atomic_energies_fn(batch.node_attrs)
         graph_e0s = scatter_sum(

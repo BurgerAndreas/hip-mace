@@ -13,6 +13,7 @@ and keeps 'hessian' if present).
 import argparse
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 import traceback
@@ -30,6 +31,13 @@ from mace.data.hdf5_dataset import HDF5Dataset
 from mace.tools.utils import AtomicNumberTable
 
 from mace.data.horm_lmdb import GLOBAL_ATOM_NUMBERS, HormLmdbDataset
+
+
+def tprint(*args, **kwargs):
+    """Print with timestamp prefix."""
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{ts}]", *args, **kwargs)
+
 
 def one_hot_to_atomic_numbers(one_hot: torch.Tensor) -> np.ndarray:
     if hasattr(one_hot, "argmax"):
@@ -157,11 +165,21 @@ def run_conversion(
 ):
     if not os.path.exists(input_path):
         # look in default cache location
-        dataset_dir = os.path.expanduser(
-            "~/.cache/kagglehub/datasets/yunhonghan/hessian-dataset-for-optimizing-reactive-mliphorm/versions/5/"
+        base_dir = os.path.expanduser(
+            "~/.cache/kagglehub/datasets/yunhonghan/hessian-dataset-for-optimizing-reactive-mliphorm/"
         )
-        if os.path.exists(os.path.join(dataset_dir, input_path)):
-            input_path = os.path.join(dataset_dir, input_path)
+        # Find the latest version directory
+        versions_dir = os.path.join(base_dir, "versions")
+        if os.path.isdir(versions_dir):
+            version_nums = sorted(
+                (int(v) for v in os.listdir(versions_dir) if v.isdigit()),
+                reverse=True,
+            )
+            for v in version_nums:
+                candidate = os.path.join(versions_dir, str(v), input_path)
+                if os.path.exists(candidate):
+                    input_path = candidate
+                    break
     
     # Prepare output path: if h5_prefix ends with .h5 use it, else create directory
     if h5_prefix is None:
@@ -189,18 +207,25 @@ def run_conversion(
         data = ds[idx]
         config = data_to_configuration(data)
         configs.append(config)
+        if idx % 10000 == 0:
+            tprint(f"Processed {idx} configurations")
 
-    print(f"Writing {len(configs)} configurations to {out_path}")
+    # Delete old h5 file if it exists
+    if os.path.exists(out_path):
+        tprint(f"Deleting existing {out_path}")
+        os.remove(out_path)
+
+    tprint(f"Writing {len(configs)} configurations to {out_path}")
     with h5py.File(out_path, "w") as f:
         save_configurations_as_HDF5(list(configs), 0, f)
 
-    print(f"Wrote {len(configs)} configurations.")
+    tprint(f"Wrote {len(configs)} configurations.")
     
 
     # Compute dataset statistics (average neighbors, mean per-atom energies, RMS of forces)
     # Create a DataLoader over the newly written HDF5 file to compute graph-based stats
     # Construct z_table from GLOBAL_ATOM_NUMBERS and set a default cutoff r_max
-    print("\nComputing dataset statistics with r_max={r_max}")
+    tprint(f"Computing dataset statistics with r_max={r_max}")
     z_list = GLOBAL_ATOM_NUMBERS.tolist()
     z_table = AtomicNumberTable(z_list)
     h5_dataset = HDF5Dataset(out_path, r_max=r_max, z_table=z_table)
@@ -226,7 +251,7 @@ def run_conversion(
     stats_path = str(Path(out_path).with_suffix(".json"))
     with open(stats_path, "w", encoding="utf-8") as sf:
         json.dump(stats, sf, indent=2)
-    print(f"Wrote statistics to {stats_path}")
+    tprint(f"Wrote statistics to {stats_path}")
 
     # Print sizes of original LMDB (file or directory) and the new HDF5 file
     def get_size_bytes(p: str) -> int:
@@ -257,15 +282,16 @@ def run_conversion(
 
     orig_size = get_size_bytes(input_path)
     new_size = get_size_bytes(out_path)
-    print(f"Original LMDB size: {orig_size} bytes ({human_readable(orig_size)})")
-    print(f"New HDF5 size: {new_size} bytes ({human_readable(new_size)})")
+    tprint(f"Original LMDB size: {orig_size} bytes ({human_readable(orig_size)})")
+    tprint(f"New HDF5 size: {new_size} bytes ({human_readable(new_size)})")
+    tprint(f"Successfully saved to: {os.path.abspath(out_path)} ({human_readable(new_size)})")
 
 
 def main():
     parser = argparse.ArgumentParser()
     # dataset_files = [
     #     "ts1x-val.lmdb",
-    #     "ts1x_hess_train_big.lmdb",
+    #     "ts1x_hess_train.lmdb",
     #     "RGD1.lmdb",
     # ]
     parser.add_argument("--in_file", required=True)

@@ -40,7 +40,7 @@ uv run scripts/download_horm_data_kaggle.py
 # process the data
 uv run scripts/convert_lmdb_to_h5.py --in_file "data/sample_100.lmdb" 
 uv run scripts/convert_lmdb_to_h5.py --in_file "ts1x-val.lmdb" 
-uv run scripts/convert_lmdb_to_h5.py --in_file "ts1x_hess_train_big.lmdb" 
+uv run scripts/convert_lmdb_to_h5.py --in_file "ts1x_hess_train.lmdb" 
 # uv run scripts/convert_lmdb_to_h5.py --in_file "RGD1.lmdb" 
 ```
 

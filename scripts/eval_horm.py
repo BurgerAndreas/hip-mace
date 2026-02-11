@@ -199,7 +199,7 @@ def evaluate_hessian_on_horm_dataset(
     # Setup wandb if needed
     wandb.init(
         project=args.wandb_project,
-        name=f"{ckpt_name}_{hessian_method}_{max_samples if max_samples else 'all'}",
+        name=None if args.wandb_run_id else f"{ckpt_name}_{hessian_method}_{max_samples if max_samples else 'all'}",
         config={
             "checkpoint_path": checkpoint_path,
             "max_samples": max_samples,
@@ -209,7 +209,7 @@ def evaluate_hessian_on_horm_dataset(
         id=args.wandb_run_id,
         #  If a run with the specified id exists, it will resume,
         # otherwise, a new run will be created.
-        resume="allow", 
+        resume="allow",
     )
 
     # Main evaluation loop
