@@ -46,12 +46,12 @@ uv run scripts/convert_lmdb_to_h5.py --in_file "ts1x_hess_train_big.lmdb"
 
 Train HIP-MACE on the full dataset
 ```bash
-uv run scripts/run_train.py --config=configs/horm_t1x_.yaml --hip=true 
+uv run scripts/run_train.py --config=configs/horm_t1x.yaml --hip=true 
 ```
 
 Train regular MACE model on just energy and forces
 ```bash
-uv run scripts/run_train.py --config=configs/horm_t1x_.yaml
+uv run scripts/run_train.py --config=configs/horm_t1x.yaml
 ```
 
 Compare HIP-MACE to autograd Hessians from regular MACE (will run automatically at the end of training)
