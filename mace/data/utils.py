@@ -12,6 +12,7 @@ import ase.data
 import ase.io
 import h5py
 import numpy as np
+from tqdm import tqdm
 
 from mace.tools.utils import AtomicNumberTable
 from mace.tools.default_keys import DefaultKeys
@@ -413,7 +414,7 @@ def save_AtomicData_to_HDF5(data, i, h5_file) -> None:
 
 def save_configurations_as_HDF5(configurations: Configurations, _, h5_file) -> None:
     grp = h5_file.create_group("config_batch_0")
-    for j, config in enumerate(configurations):
+    for j, config in enumerate(tqdm(configurations, desc="Writing HDF5")):
         subgroup_name = f"config_{j}"
         subgroup = grp.create_group(subgroup_name)
         subgroup["atomic_numbers"] = write_value(config.atomic_numbers)
