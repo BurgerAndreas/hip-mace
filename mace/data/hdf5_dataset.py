@@ -86,7 +86,7 @@ class HDF5Dataset(Dataset):
 def dataset_from_sharded_hdf5(
     files: List, z_table: AtomicNumberTable, r_max: float, **kwargs
 ):
-    files = glob(files + "/*")
+    files = glob(files + "/*.h5") + glob(files + "/*.hdf5")
     print("dataset_from_sharded_hdf5 found files: ", files)
     datasets = []
     for file in files:
