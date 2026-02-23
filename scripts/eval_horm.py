@@ -19,6 +19,7 @@ from mace.tools.run_train_utils import (
     load_dataset_for_path,
     normalize_file_paths,
 )
+from mace.tools.scripts_utils import check_path_ase_read
 from mace.tools.multihead_tools import (
     HeadConfig,
     apply_pseudolabels_to_pt_head_configs,
@@ -162,12 +163,27 @@ def evaluate_hessian_on_horm_dataset(
 
     args.key_specification = KeySpecification()
     update_keyspec_from_kwargs(args.key_specification, vars(args))
+
+    collection = None
+    valid_paths = normalize_file_paths(args.valid_file)
+    if all(check_path_ase_read(p) for p in valid_paths):
+        collection = []
+        for path in valid_paths:
+            _, configs_from_file = data.load_from_xyz(
+                file_path=path,
+                key_specification=args.key_specification,
+                extract_atomic_energies=False,
+                head_name="Default",
+            )
+            collection.extend(configs_from_file)
+
     dataset = load_dataset_for_path(
         file_path=args.valid_file,
         r_max=args.r_max,
         z_table=z_table,
         head_config=HeadConfig("default", args.key_specification),
         heads=["Default"],
+        collection=collection,
     )
     dataloader = torch_geometric.dataloader.DataLoader(
         dataset=dataset,

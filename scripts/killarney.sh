@@ -10,7 +10,8 @@
 #SBATCH --error=/scratch/aburger/hip-mace/outslurm/slurm-%j.txt
 
 # activate venv
-source .venv/bin/activate
+#source .venv/bin/activate
+uv sync
 
 which python
 
