@@ -188,7 +188,38 @@ def evaluate_hessian_on_horm_dataset(
     if os.path.exists(results_file) and not redo:
         print(f"Loading existing results from {results_file}")
         df_results = pd.read_csv(results_file)
-        aggregated_results = None # only calculate below if re-evaluated
+        aggregated_results = {
+            "energy_mae": df_results["energy_error"].mean(),
+            "forces_mae": df_results["forces_error"].mean(),
+            "hessian_mae": df_results["hessian_error"].mean(),
+            "asymmetry_mae": df_results["asymmetry_error"].mean(),
+            "true_asymmetry_mae": df_results["true_asymmetry_error"].mean(),
+            "eigval_mae": df_results["eigval_mae"].mean(),
+            "eigval1_mae": df_results["eigval1_mae"].mean(),
+            "eigval2_mae": df_results["eigval2_mae"].mean(),
+            "eigvec1_cos": df_results["eigvec1_cos"].mean(),
+            "eigvec2_cos": df_results["eigvec2_cos"].mean(),
+            "eigval_mae_eckart": df_results["eigval_mae_eckart"].mean(),
+            "eigval1_mae_eckart": df_results["eigval1_mae_eckart"].mean(),
+            "eigval2_mae_eckart": df_results["eigval2_mae_eckart"].mean(),
+            "eigvec1_cos_eckart": df_results["eigvec1_cos_eckart"].mean(),
+            "eigvec2_cos_eckart": df_results["eigvec2_cos_eckart"].mean(),
+            "neg_num_agree": df_results["neg_num_agree"].mean(),
+            "true_neg_num": df_results["true_neg_num"].mean(),
+            "model_neg_num": df_results["model_neg_num"].mean(),
+            "true_is_ts": df_results["true_is_ts"].mean(),
+            "true_is_minima": df_results["true_is_minima"].mean(),
+            "true_is_ts_order2": df_results["true_is_ts_order2"].mean(),
+            "true_is_higher_order": df_results["true_is_higher_order"].mean(),
+            "model_is_ts": df_results["model_is_ts"].mean(),
+            "model_is_minima": df_results["model_is_minima"].mean(),
+            "model_is_ts_order2": df_results["model_is_ts_order2"].mean(),
+            "model_is_higher_order": df_results["model_is_higher_order"].mean(),
+            "is_ts_agree": (df_results["model_is_ts"] == df_results["true_is_ts"]).mean(),
+            "time": df_results["time"].mean(),
+            "memory": df_results["memory"].mean(),
+            "hessian_fraction_zero": df_results["hessian_fraction_zero"].mean(),
+        }
         return df_results, aggregated_results
 
 
@@ -502,6 +533,8 @@ if __name__ == "__main__":
     args.forces_key = config["forces_key"]
     args.hessian_key = config["hessian_key"]
     args.default_dtype = config["default_dtype"]
+    if "wandb_project" in config:
+        args.wandb_project = config["wandb_project"]
 
     # Validation file: command-line overrides config
     if args.valid_file is None:
