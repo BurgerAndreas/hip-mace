@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -A aip-aspuru
 #SBATCH -D /scratch/aburger/hip-mace
-#SBATCH --time=47:00:00
+#SBATCH --time=70:00:00
 #SBATCH --gres=gpu:l40s:1
 #SBATCH --mem=128GB
 #SBATCH --job-name=hip-mace

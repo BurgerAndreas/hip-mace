@@ -24,9 +24,9 @@ def normalize_file_paths(file_paths: Union[str, List[str]]) -> List[str]:
         A list of file paths
     """
     if isinstance(file_paths, str):
-        return [file_paths]
+        return [os.path.expanduser(file_paths)]
     if isinstance(file_paths, list):
-        return file_paths
+        return [os.path.expanduser(f) for f in file_paths]
     raise ValueError(f"Unexpected file paths format: {type(file_paths)}")
 
 
