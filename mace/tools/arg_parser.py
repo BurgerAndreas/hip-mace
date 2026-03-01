@@ -1048,7 +1048,7 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--samples_per_epoch",
         help="Stop each training epoch after this many samples (None uses full epoch)",
-        type=int,
+        type=lambda x: None if x.lower() == "none" else int(x),
         default=None,
     )
     parser.add_argument(
