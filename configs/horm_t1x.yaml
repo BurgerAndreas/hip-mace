@@ -63,7 +63,7 @@ hessian_key: hessian # for HIP
 
 # ====== Loss and optimization ======
 loss: l1l2energyforces # weighted = MSE for both energy and forces
-hessian_weight: 50.0
+hessian_weight: 100.0
 forces_weight: 100.0
 energy_weight: 1.0
 virials_weight: 1.0
