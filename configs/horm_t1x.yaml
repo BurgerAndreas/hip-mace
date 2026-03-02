@@ -41,7 +41,7 @@ hip: false
 # ====== Dataset ======
 train_file: ~/.cache/kagglehub/datasets/yunhonghan/hessian-dataset-for-optimizing-reactive-mliphorm/versions/6/ts1x_hess_train
 valid_file: ~/.cache/kagglehub/datasets/yunhonghan/hessian-dataset-for-optimizing-reactive-mliphorm/versions/6/ts1x-val
-valid_fraction: 0.1 # only used when no explicit validation file is given
+# valid_fraction: 0.1 # only used when no explicit validation file is given
 max_valid_samples: 1000
 samples_per_epoch: 200000 # stop the epoch early after this many samples
 test_file: null
@@ -66,7 +66,7 @@ loss: l1l2energyforces # weighted = MSE for both energy and forces
 hessian_weight: 100.0
 forces_weight: 100.0
 energy_weight: 1.0
-virials_weight: 1.0
+virials_weight: 0.0
 optimizer: adam
 beta: 0.9
 batch_size: 64
@@ -76,7 +76,7 @@ weight_decay: 5e-7
 amsgrad: true
 scheduler: ReduceLROnPlateau
 lr_factor: 0.8
-scheduler_patience: 5
+scheduler_patience: 20
 lr_scheduler_gamma: 0.9993
 warmup_epochs: 100
 min_lr: 0.0001
