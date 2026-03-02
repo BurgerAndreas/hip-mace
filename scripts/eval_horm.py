@@ -6,7 +6,6 @@ import pandas as pd
 import os
 import json
 from tqdm import tqdm
-from torch_geometric.loader import DataLoader as TGDataLoader
 
 from mace import data, modules, tools
 
