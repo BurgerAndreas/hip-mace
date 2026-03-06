@@ -260,9 +260,9 @@ class Contraction(torch.nn.Module):
 
 
 class EmptyParam(torch.nn.Parameter):
-    def __new__(cls, data):  # pylint: disable=signature-differs
+    def __new__(cls, data, requires_grad=False, *args, **kwargs):  # pylint: disable=signature-differs
         zero = torch.zeros_like(data)
-        return super().__new__(cls, zero, requires_grad=False)
+        return super().__new__(cls, zero, requires_grad=False, *args, **kwargs)
 
     def requires_grad_(self):
         return self
