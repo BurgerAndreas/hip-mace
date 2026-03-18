@@ -1011,6 +1011,12 @@ def run(args) -> Dict[str, Any]:
         else:
             for key in args.wandb_log_hypers:
                 wandb_config[key] = args_dict[key]
+        wandb_run_id_file = os.path.join(args.checkpoints_dir, "wandb_run_id.txt")
+        wandb_run_id = None
+        if os.path.exists(wandb_run_id_file):
+            with open(wandb_run_id_file, "r") as f:
+                wandb_run_id = f.read().strip()
+            logging.info(f"Resuming wandb run {wandb_run_id}")
         wandb.init(
             project=args.wandb_project,
             entity=args.wandb_entity,
@@ -1018,6 +1024,7 @@ def run(args) -> Dict[str, Any]:
             config=wandb_config,
             dir=args.wandb_dir,
             resume="allow",
+            id=wandb_run_id,
         )
         wandb.run.summary["params"] = args_dict_json
         # write the wandb run id to file
