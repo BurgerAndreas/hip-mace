@@ -39,3 +39,6 @@ results_evalhorm/
 *.db
 .benchmarks
 *.png
+
+**/*.model
+.github
