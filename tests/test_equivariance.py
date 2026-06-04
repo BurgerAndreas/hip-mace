@@ -75,7 +75,11 @@ def test_hip_mace_equivariance():
         atomic_numbers=atoms.get_atomic_numbers(),
         positions=atoms.get_positions(),
         # Dummy properties required by config init
-        properties={"energy": -10.0, "forces": np.zeros((3,3)), "hessian": np.zeros((3*3, 3*3))},
+        properties={
+            "energy": -10.0,
+            "forces": np.zeros((3, 3)),
+            "hessian": np.zeros(3 * 3 * 3 * 3),
+        },
         property_weights={"energy": 1.0, "forces": 1.0, "hessian": 1.0},
     )
     

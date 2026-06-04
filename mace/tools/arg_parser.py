@@ -320,12 +320,6 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         choices=["mean", "learnable"],
     )
     parser.add_argument(
-        "--hessian_message_passing_layer",
-        help="Which interaction layer to use for Hessian MP features (None=last)",
-        type=lambda x: int(x) if isinstance(x, str) and x.lower() != "none" else None,
-        default=None,
-    )
-    parser.add_argument(
         "--hessian_separate_radial_network",
         help="Use a separate radial network (MLP) for Hessian (not shared with energy)",
         type=str2bool,
@@ -356,6 +350,18 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=False,
     )
     parser.add_argument(
+        "--hessian_pair_conditioned_offdiag",
+        help="Use raw edge messages plus sender/receiver node features, species attrs, radial features, and edge spherical harmonics in the HIP off-diagonal projection",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
+        "--hessian_dedicated_pair_offdiag",
+        help="Use a dedicated sender/receiver pair representation for HIP off-diagonal blocks instead of raw pre-aggregation interaction messages",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
         "--hessian_offdiag_use_tensor_product",
         help="Add a parity-correct (node 1o) ⊗ (edge 1o) tensor-product path for off-diagonal HIP Hessian features (enables learning 1e even if backbone has no 1e)",
         type=str2bool,
@@ -377,7 +383,7 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         "--hessian_hidden_irreps",
         help="Optional irreps for Hessian-only interaction layers (overrides backbone hidden_irreps for num_interactions_hessian)",
         type=str,
-        default="64x0e + 64x1e + 64x1o + 64x2e",
+        default="128x0e + 128x1e + 128x1o + 128x2e",
     )
 
     parser.add_argument(

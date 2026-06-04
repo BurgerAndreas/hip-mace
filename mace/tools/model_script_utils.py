@@ -11,6 +11,43 @@ from mace.tools.scripts_utils import extract_config_mace_model
 from mace.tools.utils import AtomicNumberTable
 
 
+def _parse_optional_literal_list(value):
+    if value is None:
+        return None
+    if isinstance(value, str):
+        if value.lower() in ("none", "null"):
+            return None
+        return ast.literal_eval(value)
+    return value
+
+
+def _get_hessian_model_options(args):
+    return {
+        "hip": args.hip,
+        "hessian_feature_dim": args.hessian_feature_dim,
+        "hessian_use_last_layer_only": args.hessian_use_last_layer_only,
+        "hessian_r_max": args.hessian_r_max,
+        "hessian_edge_lmax": args.hessian_edge_lmax,
+        "hessian_use_radial": args.hessian_use_radial,
+        "hessian_aggregation": args.hessian_aggregation,
+        "hessian_separate_radial_network": args.hessian_separate_radial_network,
+        "hessian_radial_MLP": _parse_optional_literal_list(args.hessian_radial_MLP),
+        "hessian_use_edge_gates": args.hessian_use_edge_gates,
+        "hessian_pair_conditioned_offdiag": args.hessian_pair_conditioned_offdiag,
+        "hessian_dedicated_pair_offdiag": args.hessian_dedicated_pair_offdiag,
+        "hessian_offdiag_use_tensor_product": args.hessian_offdiag_use_tensor_product,
+        "hessian_offdiag_use_tensor_product_l2": args.hessian_offdiag_use_tensor_product_l2,
+        "num_interactions_hessian": args.num_interactions_hessian,
+        "hessian_hidden_irreps": (
+            o3.Irreps(args.hessian_hidden_irreps)
+            if args.hessian_hidden_irreps
+            else None
+        ),
+        "hessian_diag_norm": args.hessian_diag_norm,
+        "hessian_off_diag_norm": args.hessian_off_diag_norm,
+    }
+
+
 def configure_model(
     args,
     train_loader,
@@ -77,6 +114,7 @@ def configure_model(
         args.embedding_specs = ast.literal_eval(args.embedding_specs)
         logging.info("Using embedding specifications from command line arguments")
         logging.info(f"Embedding specifications: {args.embedding_specs}")
+    hessian_model_options = _get_hessian_model_options(args)
     # Build model
     if model_foundation is not None and args.model in [
         "MACE",
@@ -115,6 +153,7 @@ def configure_model(
             model_config_foundation["atomic_inter_shift"] = [0.0] * len(heads)
         model_config_foundation["atomic_inter_scale"] = [1.0] * len(heads)
         args.avg_num_neighbors = model_config_foundation["avg_num_neighbors"]
+        model_config_foundation.update(hessian_model_options)
         args.model = (
             "FoundationMACELES" if args.model == "MACELES" else "FoundationMACE"
         )
@@ -207,21 +246,7 @@ def configure_model(
             use_reduced_cg=args.use_reduced_cg,
             use_so3=args.use_so3,
             cueq_config=cueq_config,
-            # Added for HIP Hessian prediction
-            hip=args.hip,
-            hessian_feature_dim=args.hessian_feature_dim,
-            hessian_use_last_layer_only=args.hessian_use_last_layer_only,
-            hessian_r_max=args.hessian_r_max,
-            hessian_edge_lmax=args.hessian_edge_lmax,
-            hessian_use_radial=args.hessian_use_radial,
-            hessian_aggregation=args.hessian_aggregation,
-            hessian_message_passing_layer=args.hessian_message_passing_layer,
-            hessian_offdiag_use_tensor_product=args.hessian_offdiag_use_tensor_product,
-            hessian_offdiag_use_tensor_product_l2=args.hessian_offdiag_use_tensor_product_l2,
-            num_interactions_hessian=args.num_interactions_hessian,
-            hessian_hidden_irreps=o3.Irreps(args.hessian_hidden_irreps) if args.hessian_hidden_irreps else None,
-            hessian_diag_norm=args.hessian_diag_norm,
-            hessian_off_diag_norm=args.hessian_off_diag_norm,
+            **hessian_model_options,
         )
         model_config_foundation = None
 
