@@ -146,8 +146,19 @@ def valid_err_log(
         error_e = eval_metrics["mae_e"] * 1e3
         error_f = eval_metrics["mae_f"] * 1e3
         error_h = eval_metrics["mae_h"] * 1e3
+        hessian_errors = f"MAE_H={error_h:.2f} meV / A^2"
+        if (
+            eval_metrics.get("mae_h_diag") is not None
+            and eval_metrics.get("mae_h_off_diag") is not None
+        ):
+            error_h_diag = eval_metrics["mae_h_diag"] * 1e3
+            error_h_off_diag = eval_metrics["mae_h_off_diag"] * 1e3
+            hessian_errors += (
+                f", MAE_H_diag={error_h_diag:.2f} meV / A^2, "
+                f"MAE_H_off_diag={error_h_off_diag:.2f} meV / A^2"
+            )
         logging.info(
-            f"{inintial_phrase}: head: {valid_loader_name}, loss={valid_loss:.4f}, MAE_E={error_e:.2f} meV, MAE_F={error_f:.2f} meV / A, MAE_H={error_h:.2f} meV / A^2",
+            f"{inintial_phrase}: head: {valid_loader_name}, loss={valid_loss:.4f}, MAE_E={error_e:.2f} meV, MAE_F={error_f:.2f} meV / A, {hessian_errors}",
         )
     elif log_errors == "DipoleRMSE":
         error_mu = eval_metrics["rmse_mu_per_atom"] * 1e3
@@ -831,6 +842,8 @@ class MACELoss(Metric):
         self.add_state("delta_fs", default=[], dist_reduce_fx="cat")
         self.add_state("H_computed", default=torch.tensor(0.0), dist_reduce_fx="sum")
         self.add_state("delta_hs", default=[], dist_reduce_fx="cat")
+        self.add_state("delta_hs_diag", default=[], dist_reduce_fx="cat")
+        self.add_state("delta_hs_off_diag", default=[], dist_reduce_fx="cat")
         # self.add_state("delta_hs_per_atom", default=[], dist_reduce_fx="cat")
         self.add_state(
             "stress_computed", default=torch.tensor(0.0), dist_reduce_fx="sum"
@@ -878,7 +891,13 @@ class MACELoss(Metric):
             )
         # for HIP
         if output.get("hessian", None) is not None and batch.hessian is not None:
-            self.delta_hs.append(batch.hessian - output["hessian"])
+            delta_hs = batch.hessian - output["hessian"]
+            self.delta_hs.append(delta_hs)
+            diag_delta_hs, off_diag_delta_hs = self._split_hessian_block_deltas(
+                delta_hs, batch.ptr
+            )
+            self.delta_hs_diag.extend(diag_delta_hs)
+            self.delta_hs_off_diag.extend(off_diag_delta_hs)
             self.H_computed += 1.0  # TODO@HIP add proper filtering
             # self.H_computed += filter_nonzero_weight(
             #     batch, self.delta_hs, batch.weight, batch.hessian_weight
@@ -935,6 +954,44 @@ class MACELoss(Metric):
             delta = torch.cat(delta)
         return to_numpy(delta)
 
+    @staticmethod
+    def _has_values(delta: Union[torch.Tensor, List[torch.Tensor]]) -> bool:
+        if isinstance(delta, list):
+            return len(delta) > 0
+        return delta.numel() > 0
+
+    @staticmethod
+    def _split_hessian_block_deltas(
+        delta_hs: torch.Tensor, ptr: torch.Tensor
+    ) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
+        diag_delta_hs = []
+        off_diag_delta_hs = []
+        hessian_offset = 0
+
+        for n_atoms_tensor in ptr[1:] - ptr[:-1]:
+            n_atoms = int(n_atoms_tensor.item())
+            n_coords = n_atoms * 3
+            hessian_size = n_coords * n_coords
+            graph_delta_hs = delta_hs[hessian_offset : hessian_offset + hessian_size]
+            hessian_offset += hessian_size
+
+            if n_atoms == 0:
+                continue
+
+            block_delta_hs = graph_delta_hs.reshape(n_atoms, 3, n_atoms, 3).permute(
+                0, 2, 1, 3
+            )
+            atom_idx = torch.arange(n_atoms, device=delta_hs.device)
+            diag_delta_hs.append(block_delta_hs[atom_idx, atom_idx].reshape(-1))
+
+            if n_atoms > 1:
+                off_diag_mask = ~torch.eye(
+                    n_atoms, dtype=torch.bool, device=delta_hs.device
+                )
+                off_diag_delta_hs.append(block_delta_hs[off_diag_mask].reshape(-1))
+
+        return diag_delta_hs, off_diag_delta_hs
+
     def compute(self):
 
         class NoneMultiply:
@@ -972,6 +1029,12 @@ class MACELoss(Metric):
         if self.H_computed:
             delta_hs = self.convert(self.delta_hs)
             aux["mae_h"] = compute_mae(delta_hs)
+            if self._has_values(self.delta_hs_diag):
+                delta_hs_diag = self.convert(self.delta_hs_diag)
+                aux["mae_h_diag"] = compute_mae(delta_hs_diag)
+            if self._has_values(self.delta_hs_off_diag):
+                delta_hs_off_diag = self.convert(self.delta_hs_off_diag)
+                aux["mae_h_off_diag"] = compute_mae(delta_hs_off_diag)
         if self.stress_computed:
             delta_stress = self.convert(self.delta_stress)
             aux["mae_stress"] = compute_mae(delta_stress)

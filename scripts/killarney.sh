@@ -2,7 +2,7 @@
 #SBATCH -A aip-aspuru
 #SBATCH -D /scratch/aburger/hip-mace
 #SBATCH --time=70:00:00
-#SBATCH --gres=gpu:l40s:1
+#SBATCH --gres=gpu:h100:1 #gpu:l40s:1
 #SBATCH --mem=128GB
 #SBATCH --job-name=hip-mace
 # Jobs must write their output to your scratch or project directory (home is read-only on compute nodes).

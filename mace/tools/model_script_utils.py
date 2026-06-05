@@ -35,6 +35,7 @@ def _get_hessian_model_options(args):
         "hessian_use_edge_gates": args.hessian_use_edge_gates,
         "hessian_pair_conditioned_offdiag": args.hessian_pair_conditioned_offdiag,
         "hessian_dedicated_pair_offdiag": args.hessian_dedicated_pair_offdiag,
+        "hessian_pair_mace_offdiag": args.hessian_pair_mace_offdiag,
         "hessian_offdiag_use_tensor_product": args.hessian_offdiag_use_tensor_product,
         "hessian_offdiag_use_tensor_product_l2": args.hessian_offdiag_use_tensor_product_l2,
         "num_interactions_hessian": args.num_interactions_hessian,

@@ -292,7 +292,7 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         "--hessian_use_last_layer_only",
         help="Use only last layer features for Hessian prediction",
         type=str2bool,
-        default=False,
+        default=True,
     )
     parser.add_argument(
         "--hessian_r_max",
@@ -358,6 +358,12 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--hessian_dedicated_pair_offdiag",
         help="Use a dedicated sender/receiver pair representation for HIP off-diagonal blocks instead of raw pre-aggregation interaction messages",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
+        "--hessian_pair_mace_offdiag",
+        help="Add a MACE-style tensor-product sender/receiver pair residual to HIP off-diagonal blocks",
         type=str2bool,
         default=False,
     )

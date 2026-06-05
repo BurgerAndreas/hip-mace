@@ -73,6 +73,16 @@ def create_error_table(
             "MAE F / meV / A",
             "relative F MAE %",
         ]
+    elif table_type == "TotalMAEHessian":
+        table.field_names = [
+            "config_type",
+            "MAE E / meV",
+            "MAE F / meV / A",
+            "relative F MAE %",
+            "MAE H / meV / A^2",
+            "MAE H diag / meV / A^2",
+            "MAE H off-diag / meV / A^2",
+        ]
     elif table_type == "PerAtomMAE":
         table.field_names = [
             "config_type",
@@ -219,6 +229,18 @@ def create_error_table(
                     f"{metrics['mae_e'] * 1000:8.1f}",
                     f"{metrics['mae_f'] * 1000:8.1f}",
                     f"{metrics['rel_mae_f']:8.2f}",
+                ]
+            )
+        elif table_type == "TotalMAEHessian":
+            table.add_row(
+                [
+                    name,
+                    f"{metrics['mae_e'] * 1000:8.1f}",
+                    f"{metrics['mae_f'] * 1000:8.1f}",
+                    f"{metrics['rel_mae_f']:8.2f}",
+                    f"{metrics['mae_h'] * 1000:8.1f}",
+                    f"{metrics['mae_h_diag'] * 1000:8.1f}",
+                    f"{metrics['mae_h_off_diag'] * 1000:8.1f}",
                 ]
             )
         elif table_type == "PerAtomMAE":

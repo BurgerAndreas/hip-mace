@@ -47,7 +47,8 @@ from .hip import (
     enforce_hessian_translation_invariance,
     irreps_to_cartesian_matrix,
 )
-from .wrapper_ops import FullyConnectedTensorProduct
+from .irreps_tools import tp_out_irreps_with_instructions
+from .wrapper_ops import FullyConnectedTensorProduct, TensorProduct
 
 
 @compile_mode("script")
@@ -89,7 +90,7 @@ class MACE(torch.nn.Module):
         # Added for HIP Hessian prediction
         hip: bool = False,
         hessian_feature_dim: int = 32,
-        hessian_use_last_layer_only: bool = False,
+        hessian_use_last_layer_only: bool = True,
         hessian_r_max: float = 16.0,
         hessian_edge_lmax: int = 3,  # 2 or 3
         hessian_use_radial: bool = True,  # Use radial embeddings
@@ -99,6 +100,7 @@ class MACE(torch.nn.Module):
         hessian_use_edge_gates: bool = False,  # Add equivariant gating on off-diagonal features
         hessian_pair_conditioned_offdiag: bool = False,  # Use sender+receiver features/attrs for off-diagonal HIP blocks
         hessian_dedicated_pair_offdiag: bool = False,  # Build off-diagonal HIP blocks from a dedicated pair head instead of raw messages
+        hessian_pair_mace_offdiag: bool = False,  # Add a MACE-style tensor-product pair residual to off-diagonal blocks
         hessian_offdiag_use_tensor_product: bool = False,  # Generate 0e/1e/2e via 1o ⊗ 1o path
         hessian_offdiag_use_tensor_product_l2: bool = False,  # Generate 0e/1e/2e via 2e ⊗ 2e path
         num_interactions_hessian: int = 0,  # Number of additional interaction layers for Hessian prediction
@@ -358,6 +360,7 @@ class MACE(torch.nn.Module):
             self.hessian_off_diag_norm = hessian_off_diag_norm
             self.hessian_pair_conditioned_offdiag = hessian_pair_conditioned_offdiag
             self.hessian_dedicated_pair_offdiag = hessian_dedicated_pair_offdiag
+            self.hessian_pair_mace_offdiag = hessian_pair_mace_offdiag
             self.hessian_offdiag_use_tensor_product = hessian_offdiag_use_tensor_product
             self.hessian_offdiag_use_tensor_product_l2 = hessian_offdiag_use_tensor_product_l2
 
@@ -472,6 +475,40 @@ class MACE(torch.nn.Module):
                     irreps_in=hessian_pair_context_irreps,
                     irreps_out=hessian_out_irreps,
                 )
+            if self.hessian_pair_mace_offdiag:
+                hessian_pair_node_irreps = (
+                    hessian_message_irreps  # sender node features
+                    + hessian_message_irreps  # receiver node features
+                )
+                pair_mace_mid_irreps, pair_mace_instructions = tp_out_irreps_with_instructions(
+                    hessian_pair_node_irreps,
+                    sh_irreps_hessian,
+                    hessian_out_irreps,
+                )
+                self.hessian_pair_mace_tp = TensorProduct(
+                    hessian_pair_node_irreps,
+                    sh_irreps_hessian,
+                    pair_mace_mid_irreps,
+                    instructions=pair_mace_instructions,
+                    shared_weights=False,
+                    internal_weights=False,
+                    cueq_config=cueq_config,
+                    oeq_config=oeq_config,
+                )
+                pair_mace_weight_dim = 2 * node_attr_irreps.dim
+                if self.hessian_use_radial:
+                    pair_mace_weight_dim += hessian_radial_dim
+                self.hessian_pair_mace_tp_weights = nn.FullyConnectedNet(
+                    [pair_mace_weight_dim]
+                    + hessian_radial_MLP_for_interaction
+                    + [self.hessian_pair_mace_tp.weight_numel],
+                    torch.nn.functional.silu,
+                )
+                self.hessian_pair_mace_linear = o3.Linear(
+                    irreps_in=pair_mace_mid_irreps,
+                    irreps_out=hessian_out_irreps,
+                )
+                self.hessian_pair_mace_scale = torch.nn.Parameter(torch.tensor(0.1))
 
             # Optional: parity-correct tensor-product path for off-diagonal features.
             # This can generate the 1e channel even if the backbone does not contain 1e.
@@ -942,6 +979,37 @@ class MACE(torch.nn.Module):
                         off_diag_feats = self.hessian_pair_message_proj(pair_messages)
                     else:
                         off_diag_feats = self.hessian_message_proj(raw_messages)
+                    if self.hessian_pair_mace_offdiag:
+                        pair_node_feats = torch.cat(
+                            (
+                                node_feats_for_messages[sender],
+                                node_feats_for_messages[receiver],
+                            ),
+                            dim=-1,
+                        )
+                        pair_weight_parts = []
+                        if self.hessian_use_radial:
+                            pair_weight_parts.append(edge_feats_hessian)
+                        pair_weight_parts.extend(
+                            [
+                                data["node_attrs"][sender],
+                                data["node_attrs"][receiver],
+                            ]
+                        )
+                        pair_weight_inputs = torch.cat(pair_weight_parts, dim=-1)
+                        pair_tp_weights = self.hessian_pair_mace_tp_weights(pair_weight_inputs)
+                        if envelope_hessian is not None:
+                            pair_tp_weights = pair_tp_weights * envelope_hessian
+                        pair_residual = self.hessian_pair_mace_tp(
+                            pair_node_feats,
+                            edge_attrs_hessian,
+                            pair_tp_weights,
+                        )
+                        pair_residual = self.hessian_pair_mace_linear(pair_residual)
+                        off_diag_feats = (
+                            off_diag_feats
+                            + self.hessian_pair_mace_scale * pair_residual
+                        )
                 
                 # Optional tensor-product path: (node 1o) ⊗ (edge 1o) -> (0e + 1e + 2e)
                 if self.hessian_offdiag_use_tensor_product:

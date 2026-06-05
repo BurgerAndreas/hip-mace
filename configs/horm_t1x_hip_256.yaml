@@ -38,7 +38,7 @@ compute_forces: true
 hip: true
 num_interactions_hessian: 1
 hessian_hidden_irreps: "256x0e + 256x1e + 256x1o + 256x2e"
-hessian_use_last_layer_only: false # TODO: try true to use only the final Hessian feature layer instead of learnable multi-layer aggregation
+hessian_use_last_layer_only: true # Use only the final Hessian feature layer instead of learnable multi-layer aggregation
 hessian_pair_conditioned_offdiag: false # TODO: try true to add sender+receiver features/attrs plus edge radial/SH context to raw-message off-diagonal blocks
 hessian_dedicated_pair_offdiag: false # TODO: try true to replace raw-message off-diagonal blocks with a dedicated conditioned pair head
 
