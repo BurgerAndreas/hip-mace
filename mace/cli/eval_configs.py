@@ -137,7 +137,11 @@ def run(args: argparse.Namespace) -> None:
     device = torch_tools.init_device(args.device)
 
     # Load model
-    model = torch.load(f=args.model, map_location=args.device)
+    model = torch.load(
+        f=args.model,
+        map_location=args.device,
+        weights_only=False,
+    )
     if model.__class__.__name__ != "MACELES" and args.compute_bec:
         raise ValueError("BEC can only be computed with MACELES model. ")
     if args.enable_cueq:

@@ -1,5 +1,5 @@
 # ====== Name and seed ======
-name: horm_t1x_hip_256
+name: horm_t1x_hip_graph_256
 seed: 42
 
 # ====== Directories ======
@@ -36,13 +36,13 @@ compute_forces: true
 
 # ====== HIP / Hessian prediction ======
 hip: true
-hessian_head_type: legacy # "legacy" keeps the existing inlined head; "graph" uses the cleaner HIP-style MACE graph head
-hessian_fully_connected: false # graph head defaults to fully connected even if this is false
+hessian_head_type: graph
+hessian_fully_connected: true
 num_interactions_hessian: 1
 hessian_hidden_irreps: "256x0e + 256x1e + 256x1o + 256x2e"
-hessian_use_last_layer_only: true # Use only the final Hessian feature layer instead of learnable multi-layer aggregation
-hessian_pair_conditioned_offdiag: false # TODO: try true to add sender+receiver features/attrs plus edge radial/SH context to raw-message off-diagonal blocks
-hessian_dedicated_pair_offdiag: false # TODO: try true to replace raw-message off-diagonal blocks with a dedicated conditioned pair head
+hessian_use_last_layer_only: true
+hessian_pair_conditioned_offdiag: false
+hessian_dedicated_pair_offdiag: false
 
 
 # ====== Dataset ======
@@ -106,4 +106,3 @@ wandb_project: hip-mace
 wandb_entity: ""
 wandb_name: ""
 wandb_log_hypers: null
-

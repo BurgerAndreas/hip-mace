@@ -146,7 +146,11 @@ def evaluate_hessian_on_horm_dataset(
     torch_tools.set_default_dtype(args.default_dtype)
 
     # Load model
-    model = torch.load(f=checkpoint_path, map_location=args.device)
+    model = torch.load(
+        f=checkpoint_path,
+        map_location=args.device,
+        weights_only=False,
+    )
     if args.enable_cueq:
         print("Converting models to CuEq for acceleration")
         model = run_e3nn_to_cueq(model, device=device)

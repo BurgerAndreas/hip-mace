@@ -9,6 +9,8 @@
 #SBATCH --output=/scratch/aburger/hip-mace/outslurm/slurm-%j.txt
 #SBATCH --error=/scratch/aburger/hip-mace/outslurm/slurm-%j.txt
 
+export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
+
 # activate venv
 #source .venv/bin/activate
 uv sync

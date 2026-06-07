@@ -295,6 +295,19 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=True,
     )
     parser.add_argument(
+        "--hessian_head_type",
+        help="HIP Hessian head implementation to use",
+        type=str,
+        default="legacy",
+        choices=["legacy", "graph"],
+    )
+    parser.add_argument(
+        "--hessian_fully_connected",
+        help="Use a fully connected directed Hessian graph within each molecule",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
         "--hessian_r_max",
         help="Cutoff radius for Hessian graph (Angstrom)",
         type=float,
@@ -364,6 +377,12 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--hessian_pair_mace_offdiag",
         help="Add a MACE-style tensor-product sender/receiver pair residual to HIP off-diagonal blocks",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
+        "--hessian_offdiag_edge_interaction",
+        help="Replace HIP off-diagonal blocks with a MACE-style edge interaction head",
         type=str2bool,
         default=False,
     )

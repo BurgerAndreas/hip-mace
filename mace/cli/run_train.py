@@ -16,6 +16,7 @@ import sys
 import wandb
 import numpy as np
 
+import torch
 import torch.distributed
 from e3nn.util import jit
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -582,9 +583,6 @@ def run(args) -> Dict[str, Any]:
     """
     This script runs the training/fine tuning for mace
     """
-    # Set environment variable to allow weights_only=False in torch.load
-    os.environ["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] = "1"
-    
     tag = tools.get_tag(name=args.name, seed=args.seed)
     args, input_log_messages = tools.check_args(args)
 
@@ -765,7 +763,9 @@ def run(args) -> Dict[str, Any]:
             model_foundation = calc.models[0]
         else:
             model_foundation = torch.load(
-                args.foundation_model, map_location=args.device
+                args.foundation_model,
+                map_location=args.device,
+                weights_only=False,
             )
             logging.info(
                 f"Using foundation model {args.foundation_model} as initial checkpoint."

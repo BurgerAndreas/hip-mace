@@ -44,6 +44,28 @@ def irreps_to_cartesian_matrix(irreps: torch.Tensor) -> torch.Tensor:
     )
 
 
+def fully_connected_hessian_graph_batch(data: TGBatch):
+    """Build all directed, non-self edges within each graph in a batch."""
+    device = data["positions"].device
+    positions = data["positions"]
+    batch = data["batch"]
+    num_nodes = positions.shape[0]
+
+    source = torch.arange(num_nodes, device=device, dtype=torch.long).repeat(num_nodes)
+    target = torch.arange(num_nodes, device=device, dtype=torch.long).repeat_interleave(
+        num_nodes
+    )
+    keep = (batch[source] == batch[target]) & (source != target)
+    source = source[keep]
+    target = target[keep]
+
+    edge_index = torch.stack((source, target), dim=0)
+    edge_distance_vec = positions[source] - positions[target]
+    edge_distance = edge_distance_vec.norm(dim=-1, keepdim=True)
+    neighbors = torch.bincount(batch[source], minlength=int(batch.max().item()) + 1)
+    return edge_index, edge_distance, edge_distance_vec, neighbors
+
+
 def add_extra_props_for_hessian(data: TGBatch, offset_indices: bool = True) -> TGBatch:
     """
     Optionally offset precomputed per-sample 1D indices to batched/global space
@@ -406,6 +428,7 @@ def add_hessian_graph_batch(
     hessian_r_max: float = 16.0,
     max_neighbors: int = 1_000_000,
     use_pbc: Optional[Tuple[bool, bool, bool]] = None,
+    fully_connected: bool = False,
 ) -> TGBatch:
     """
     Build Hessian graph and precompute globally-offset indices for a batched object.
@@ -434,7 +457,14 @@ def add_hessian_graph_batch(
     data["natoms"] = torch.bincount(data["batch"])
 
     # 1) Generate batched Hessian graph
-    if generate_graph is not None:
+    if fully_connected:
+        (
+            edge_index_hessian,
+            edge_distance_hessian,
+            edge_distance_vec_hessian,
+            neighbors_hessian,
+        ) = fully_connected_hessian_graph_batch(data)
+    elif generate_graph is not None:
         # Use torch_geometric like fairchem / EquiformerV2
         (
             edge_index_hessian,

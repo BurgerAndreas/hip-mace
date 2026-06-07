@@ -47,6 +47,7 @@ from .hip import (
     enforce_hessian_translation_invariance,
     irreps_to_cartesian_matrix,
 )
+from .hessian_heads import HIPGraphHessianHead
 from .irreps_tools import tp_out_irreps_with_instructions
 from .wrapper_ops import FullyConnectedTensorProduct, TensorProduct
 
@@ -101,12 +102,15 @@ class MACE(torch.nn.Module):
         hessian_pair_conditioned_offdiag: bool = False,  # Use sender+receiver features/attrs for off-diagonal HIP blocks
         hessian_dedicated_pair_offdiag: bool = False,  # Build off-diagonal HIP blocks from a dedicated pair head instead of raw messages
         hessian_pair_mace_offdiag: bool = False,  # Add a MACE-style tensor-product pair residual to off-diagonal blocks
+        hessian_offdiag_edge_interaction: bool = False,  # Replace off-diagonal blocks with a MACE-style edge interaction head
         hessian_offdiag_use_tensor_product: bool = False,  # Generate 0e/1e/2e via 1o ⊗ 1o path
         hessian_offdiag_use_tensor_product_l2: bool = False,  # Generate 0e/1e/2e via 2e ⊗ 2e path
         num_interactions_hessian: int = 0,  # Number of additional interaction layers for Hessian prediction
         hessian_hidden_irreps: Optional[o3.Irreps] = None,  # Optional irreps for Hessian-only interactions
         hessian_diag_norm: bool = False,
         hessian_off_diag_norm: bool = False,
+        hessian_head_type: str = "legacy",
+        hessian_fully_connected: bool = False,
     ):
         super().__init__()
         self.register_buffer(
@@ -296,6 +300,12 @@ class MACE(torch.nn.Module):
 
         self.hessian_use_last_layer_only = hessian_use_last_layer_only
         self.hip = hip
+        self.hessian_feature_dim = hessian_feature_dim
+        self.hessian_edge_lmax = hessian_edge_lmax
+        self.hessian_head_type = hessian_head_type
+        self.hessian_fully_connected = hessian_fully_connected or (
+            hessian_head_type == "graph"
+        )
         self.register_buffer(
             "hessian_r_max", torch.tensor(hessian_r_max, dtype=torch.get_default_dtype())
         )
@@ -361,6 +371,7 @@ class MACE(torch.nn.Module):
             self.hessian_pair_conditioned_offdiag = hessian_pair_conditioned_offdiag
             self.hessian_dedicated_pair_offdiag = hessian_dedicated_pair_offdiag
             self.hessian_pair_mace_offdiag = hessian_pair_mace_offdiag
+            self.hessian_offdiag_edge_interaction = hessian_offdiag_edge_interaction
             self.hessian_offdiag_use_tensor_product = hessian_offdiag_use_tensor_product
             self.hessian_offdiag_use_tensor_product_l2 = hessian_offdiag_use_tensor_product_l2
 
@@ -509,6 +520,41 @@ class MACE(torch.nn.Module):
                     irreps_out=hessian_out_irreps,
                 )
                 self.hessian_pair_mace_scale = torch.nn.Parameter(torch.tensor(0.1))
+            if self.hessian_offdiag_edge_interaction:
+                hessian_edge_pair_irreps = (
+                    hessian_message_irreps  # sender node features
+                    + hessian_message_irreps  # receiver node features
+                )
+                hessian_edge_mid_irreps, hessian_edge_instructions = (
+                    tp_out_irreps_with_instructions(
+                        hessian_edge_pair_irreps,
+                        sh_irreps_hessian,
+                        hessian_out_irreps,
+                    )
+                )
+                self.hessian_offdiag_edge_tp = TensorProduct(
+                    hessian_edge_pair_irreps,
+                    sh_irreps_hessian,
+                    hessian_edge_mid_irreps,
+                    instructions=hessian_edge_instructions,
+                    shared_weights=False,
+                    internal_weights=False,
+                    cueq_config=cueq_config,
+                    oeq_config=oeq_config,
+                )
+                hessian_edge_weight_dim = 2 * node_attr_irreps.dim
+                if self.hessian_use_radial:
+                    hessian_edge_weight_dim += hessian_radial_dim
+                self.hessian_offdiag_edge_tp_weights = nn.FullyConnectedNet(
+                    [hessian_edge_weight_dim]
+                    + hessian_radial_MLP_for_interaction
+                    + [self.hessian_offdiag_edge_tp.weight_numel],
+                    torch.nn.functional.silu,
+                )
+                self.hessian_offdiag_edge_linear = o3.Linear(
+                    irreps_in=hessian_edge_mid_irreps,
+                    irreps_out=hessian_out_irreps,
+                )
 
             # Optional: parity-correct tensor-product path for off-diagonal features.
             # This can generate the 1e channel even if the backbone does not contain 1e.
@@ -588,6 +634,41 @@ class MACE(torch.nn.Module):
                         use_agnostic_product=use_agnostic_product,
                     )
                     self.hessian_products.append(hessian_prod)
+
+            if self.hessian_head_type == "graph":
+                self.hessian_graph_head = HIPGraphHessianHead(
+                    node_attr_irreps=node_attr_irreps,
+                    backbone_irreps=hidden_irreps,
+                    state_irreps=hessian_message_irreps,
+                    interaction_cls=interaction_cls,
+                    num_interactions=num_interactions_hessian,
+                    num_elements=num_elements,
+                    correlation=(
+                        correlation[-1] if isinstance(correlation, list) else correlation
+                    ),
+                    atomic_numbers=atomic_numbers,
+                    avg_num_neighbors=avg_num_neighbors,
+                    hessian_r_max=hessian_r_max,
+                    hessian_edge_lmax=hessian_edge_lmax,
+                    num_bessel=num_bessel,
+                    num_polynomial_cutoff=num_polynomial_cutoff,
+                    radial_type=radial_type,
+                    distance_transform=distance_transform,
+                    apply_cutoff=apply_cutoff,
+                    radial_MLP=hessian_radial_MLP_for_interaction,
+                    hessian_feature_dim=hessian_feature_dim,
+                    edge_irreps=edge_irreps,
+                    cueq_config=cueq_config,
+                    oeq_config=oeq_config,
+                    use_reduced_cg=use_reduced_cg,
+                    use_agnostic_product=use_agnostic_product,
+                    fully_connected=self.hessian_fully_connected,
+                    enforce_translation_invariance=True,
+                )
+            elif self.hessian_head_type != "legacy":
+                raise ValueError(
+                    "hessian_head_type must be one of {'legacy', 'graph'}"
+                )
 
     def forward(
         self,
@@ -753,7 +834,7 @@ class MACE(torch.nn.Module):
             )
 
         if predict_hessian:
-            hessian = self._predict_hessian_hip(
+            hessian = self._predict_hessian(
                 data, node_feats_list, edge_attrs, edge_feats, envelope
             )
 
@@ -772,6 +853,20 @@ class MACE(torch.nn.Module):
             "hessian": hessian,
         }
     
+    def _predict_hessian(
+        self,
+        data,
+        node_feats_list,
+        edge_attrs,
+        edge_feats,
+        envelope: torch.Tensor,
+    ) -> torch.Tensor:
+        if self.hessian_head_type == "graph":
+            return self.hessian_graph_head(data, node_feats_list[-1])
+        return self._predict_hessian_hip(
+            data, node_feats_list, edge_attrs, edge_feats, envelope
+        )
+
     def _extract_raw_messages_from_interaction(
         self,
         interaction: InteractionBlock,
@@ -818,6 +913,7 @@ class MACE(torch.nn.Module):
             # max_neighbors=self.max_neighbors,
             # use_pbc=data["pbc"][-1] if len(data["pbc"]) > 3 else data["pbc"],
             use_pbc=None,
+            fully_connected=self.hessian_fully_connected,
         )
         # if otf_graph or not hasattr(data, "nedges_hessian"):
         # else:
@@ -950,7 +1046,36 @@ class MACE(torch.nn.Module):
                     pair_context_parts.append(edge_feats_hessian)
                 pair_context = torch.cat(pair_context_parts, dim=-1)
 
-                if self.hessian_dedicated_pair_offdiag:
+                if self.hessian_offdiag_edge_interaction:
+                    pair_node_feats = torch.cat(
+                        (
+                            node_feats_for_messages[sender],
+                            node_feats_for_messages[receiver],
+                        ),
+                        dim=-1,
+                    )
+                    edge_weight_parts = []
+                    if self.hessian_use_radial:
+                        edge_weight_parts.append(edge_feats_hessian)
+                    edge_weight_parts.extend(
+                        [
+                            data["node_attrs"][sender],
+                            data["node_attrs"][receiver],
+                        ]
+                    )
+                    edge_weight_inputs = torch.cat(edge_weight_parts, dim=-1)
+                    edge_tp_weights = self.hessian_offdiag_edge_tp_weights(
+                        edge_weight_inputs
+                    )
+                    if envelope_hessian is not None:
+                        edge_tp_weights = edge_tp_weights * envelope_hessian
+                    edge_hidden = self.hessian_offdiag_edge_tp(
+                        pair_node_feats,
+                        edge_attrs_hessian,
+                        edge_tp_weights,
+                    )
+                    off_diag_feats = self.hessian_offdiag_edge_linear(edge_hidden)
+                elif self.hessian_dedicated_pair_offdiag:
                     off_diag_feats = self.hessian_dedicated_pair_message_proj(pair_context)
                 else:
                     # Extract per-edge messages before aggregation using the Hessian-specific interaction
@@ -1012,7 +1137,10 @@ class MACE(torch.nn.Module):
                         )
                 
                 # Optional tensor-product path: (node 1o) ⊗ (edge 1o) -> (0e + 1e + 2e)
-                if self.hessian_offdiag_use_tensor_product:
+                if (
+                    not self.hessian_offdiag_edge_interaction
+                    and self.hessian_offdiag_use_tensor_product
+                ):
                     node_vec = self.hessian_tp_node_vec(node_feats_for_messages)  # [N, hfd x 1o]
                     # SH up to l=1 gives [0e, 1o]; slice out the 1o part (3 components)
                     edge_attrs_l1_full = self.hessian_spherical_harmonics_l1(
@@ -1027,7 +1155,10 @@ class MACE(torch.nn.Module):
                         tp_feats = tp_feats.view(tp_feats.shape[0], -1, 9) * gate.unsqueeze(-1)
                         tp_feats = tp_feats.view(tp_feats.shape[0], -1)
                     off_diag_feats = off_diag_feats + tp_feats
-                if self.hessian_offdiag_use_tensor_product_l2:
+                if (
+                    not self.hessian_offdiag_edge_interaction
+                    and self.hessian_offdiag_use_tensor_product_l2
+                ):
                     sender = edge_index_hessian[0]
                     node_l2 = self.hessian_tp_node_l2(node_feats_for_messages)  # [N, hfd x 2e]
                     edge_attrs_l2_full = self.hessian_spherical_harmonics_l2(
@@ -1304,7 +1435,7 @@ class ScaleShiftMACE(MACE):
             )
         
         if predict_hessian:
-            hessian = self._predict_hessian_hip(
+            hessian = self._predict_hessian(
                 data, node_feats_list, edge_attrs, edge_feats, envelope
             )
 

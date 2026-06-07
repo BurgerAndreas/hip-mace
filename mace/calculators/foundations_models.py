@@ -151,7 +151,7 @@ def mace_mp(
         )
 
     if return_raw_model:
-        return torch.load(model_path, map_location=device)
+        return torch.load(model_path, map_location=device, weights_only=False)
 
     mace_calc = MACECalculator(
         model_paths=model_path, device=device, default_dtype=default_dtype, **kwargs
@@ -247,7 +247,7 @@ def mace_off(
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
     if return_raw_model:
-        return torch.load(model, map_location=device)
+        return torch.load(model, map_location=device, weights_only=False)
 
     if default_dtype == "float64":
         print(
@@ -311,7 +311,7 @@ def mace_anicc(
             raise RuntimeError(f"Failed to download model: {e}") from e
 
     if return_raw_model:
-        return torch.load(model_path, map_location=device)
+        return torch.load(model_path, map_location=device, weights_only=False)
     return MACECalculator(
         model_paths=model_path, device=device, default_dtype="float64"
     )
@@ -383,7 +383,7 @@ def mace_omol(
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
     if return_raw_model:
-        return torch.load(model, map_location=device)
+        return torch.load(model, map_location=device, weights_only=False)
 
     if default_dtype == "float64":
         print(
