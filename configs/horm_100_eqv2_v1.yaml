@@ -1,0 +1,107 @@
+# ====== Name and seed ======
+name: horm100_eqv2_v1
+seed: 42
+
+# ====== Directories ======
+work_dir: .
+log_dir: null
+model_dir: null
+checkpoints_dir: null
+results_dir: null
+downloads_dir: null
+
+# ====== Device and logging ======
+device: cuda
+default_dtype: float32
+distributed: false
+launcher: slurm
+log_level: INFO
+plot: true
+error_table: TotalMAEHessian
+save_all_checkpoints: true
+
+# ====== Model ======
+model: MACE
+r_max: 7.0
+num_radial_basis: 16
+max_ell: 3
+correlation: 3
+num_interactions: 2
+MLP_irreps: "16x0e" # energy readout
+radial_MLP: "[64, 64, 64]"
+hidden_irreps: "128x0e + 128x1e + 128x1o + 128x2e"
+edge_irreps: null
+max_L: null
+avg_num_neighbors: 12.876944541931152
+compute_avg_num_neighbors: false
+compute_forces: true
+
+# ====== HIP / Hessian prediction ======
+hip: true
+hessian_head_type: eqv2_v1
+hessian_feature_dim: 128
+hessian_fully_connected: true
+num_interactions_hessian: 1
+hessian_hidden_irreps: "128x0e + 128x1e + 128x1o + 128x2e"
+
+
+# ====== Dataset ======
+train_file: ./data/sample_100.h5
+valid_file: ./data/sample_100.h5
+valid_fraction: 0.1
+test_file: null
+test_dir: null
+num_workers: 0
+pin_memory: true
+atomic_numbers: "[1, 6, 7, 8, 9]"
+mean: -611.9894409179688
+std: 0.38076332211494446
+statistics_file: null
+les_arguments: null
+# https://gitlab.com/matschreiner/Transition1x/-/blob/main/transition1x/dataloader.py
+# E0s: "{1: 0, 6: 0, 7: 0, 8: 0, 9: 0}"
+E0s: "{1: -13.62222753701504, 6: -1029.4130839658328, 7: -1484.8710358098756, 8: -2041.8396277138045, 9: -2712.8213146878606}"
+
+# ====== Keys ======
+energy_key: energy
+forces_key: forces
+hessian_key: hessian # for HIP
+
+# ====== Loss and optimization ======
+loss: l1l2l1energyforceshessian
+hessian_weight: 10.0
+forces_weight: 25.0
+energy_weight: 1.0
+virials_weight: 1.0
+optimizer: adamw
+beta: 0.9
+batch_size: 100
+valid_batch_size: 100
+lr: 0.01
+weight_decay: 0.0
+amsgrad: true
+scheduler: CosineAnnealingLR # CosineAnnealingLR
+# lr_factor: 0.8
+# scheduler_patience: 4000
+# lr_scheduler_gamma: 0.9993
+warmup_epochs: 1000
+min_lr: 0.00001
+swa: false
+ema: false
+ema_decay: 0.99
+patience: 2048
+max_num_epochs: 10000
+eval_interval: 1000
+
+# ====== Acceleration options ======
+enable_cueq: false
+only_cueq: false
+enable_oeq: false
+
+# ====== Weights and Biases ======
+wandb: true
+wandb_dir: null
+wandb_project: hip-mace
+wandb_entity: ""
+wandb_name: "horm100_eqv2_v1"
+wandb_log_hypers: null

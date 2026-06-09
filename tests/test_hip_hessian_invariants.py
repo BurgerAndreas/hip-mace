@@ -21,8 +21,12 @@ POSITIONS = np.array(
 SPECIES = np.array([8, 1, 1])
 
 
-@pytest.fixture(scope="module", name="hip_model")
-def hip_model_fixture():
+@pytest.fixture(
+    scope="module",
+    name="hip_model",
+    params=["legacy", "pair_mace_v1", "pair_v2", "eqv2_v1", "message_v1"],
+)
+def hip_model_fixture(request):
     torch.manual_seed(1)
     model = modules.MACE(
         r_max=6.0,
@@ -47,6 +51,7 @@ def hip_model_fixture():
         radial_type="bessel",
         hip=True,
         hessian_feature_dim=4,
+        hessian_head_type=request.param,
         hessian_r_max=16.0,
     )
     model.eval()
@@ -92,6 +97,16 @@ def _block_diagonal_rotation(rotation, num_atoms):
     return torch.einsum("ij,ab->iajb", eye, rotation).reshape(
         num_atoms * 3, num_atoms * 3
     )
+
+
+def test_hip_model_head_type_is_configurable(hip_model):
+    assert hip_model.hessian_head_type in {
+        "legacy",
+        "pair_mace_v1",
+        "pair_v2",
+        "eqv2_v1",
+        "message_v1",
+    }
 
 
 def test_hip_hessian_is_symmetric(hip_model):

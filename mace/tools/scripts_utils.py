@@ -321,6 +321,7 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
         config.update(
             {
                 "hip": model.hip,
+                "hessian_head_type": getattr(model, "hessian_head_type", "legacy"),
                 "hessian_feature_dim": getattr(model, "hessian_feature_dim", 64),
                 "hessian_r_max": getattr(model, "hessian_r_max").item()
                 if hasattr(model, "hessian_r_max")

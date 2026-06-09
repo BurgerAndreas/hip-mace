@@ -36,6 +36,7 @@ from .loss import (
     WeightedForcesLoss,
     WeightedHuberEnergyForcesStressLoss,
 )
+from .hip_head import HIPHeadEqV2, HIPHeadV2
 from .models import (
     MACE,
     AtomicDielectricMACE,
@@ -105,6 +106,8 @@ __all__ = [
     "GaussianBasis",
     "MACE",
     "ScaleShiftMACE",
+    "HIPHeadV2",
+    "HIPHeadEqV2",
     "AtomicDipolesMACE",
     "AtomicDielectricMACE",
     "EnergyDipolesMACE",

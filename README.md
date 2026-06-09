@@ -59,10 +59,9 @@ Compare HIP-MACE to autograd Hessians from regular MACE (will run automatically 
 uv run scripts/eval_horm.py
 ```
 
-Note:
-I recommend you use `--hidden_irreps="128x0e + 128x1e + 128x1o + 128x2e"` instead of the typical `--hidden_irreps="128x0e + 128x1o + 128x2e"`, because we need the even parity `1e` features for the Hessian off-diagonal.
-Alternatively you can use `--num_interactions_hessian=1` and `--hessian_hidden_irreps="128x0e + 128x1e + 128x1o + 128x2e"` or just `hessian_offdiag_use_tensor_product=True`.
+### Ideas
 
+- acoustic/row-sum check: For a true Hessian of a translationally invariant potential, every row block must sum to zero: H_ii = - sum_{j != i} H_ij
 
 ---
 ---

@@ -25,6 +25,7 @@ def _get_hessian_model_options(args):
     return {
         "hip": args.hip,
         "hessian_feature_dim": args.hessian_feature_dim,
+        "hessian_head_type": args.hessian_head_type,
         "hessian_r_max": args.hessian_r_max,
         "hessian_radial_MLP": _parse_optional_literal_list(args.hessian_radial_MLP),
         "hessian_use_edge_gates": args.hessian_use_edge_gates,
@@ -194,8 +195,10 @@ def configure_model(
 
         logging.info(f"Hidden irreps: {args.hidden_irreps}")
 
-        # Check if HIP is enabled and backbone has no 1e features
-        if args.hip:
+        # Check if HIP is enabled and backbone has no 1e features.
+        # The pair_v2 head is exempt: it generates the even 1e channel internally via
+        # its (1o x 1o -> 1e) tensor-product path, so it never requires 1e in the irreps.
+        if args.hip and args.hessian_head_type != "pair_v2":
             hidden_irreps_parsed = o3.Irreps(args.hidden_irreps)
             has_1e = any(irrep.ir.l == 1 and irrep.ir.p == 1 for irrep in hidden_irreps_parsed)
             hessian_has_1e = False

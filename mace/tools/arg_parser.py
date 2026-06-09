@@ -289,6 +289,13 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=64,
     )
     parser.add_argument(
+        "--hessian_head_type",
+        help="HIP Hessian head implementation to use",
+        choices=["legacy", "pair_mace_v1", "pair_v2", "eqv2_v1", "message_v1"],
+        type=str,
+        default="legacy",
+    )
+    parser.add_argument(
         "--hessian_fully_connected",
         help="Use a fully connected directed Hessian graph within each molecule",
         type=str2bool,
