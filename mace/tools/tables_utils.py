@@ -151,6 +151,16 @@ def create_error_table(
                 name + "_final_rmse_f": metrics["rmse_f"] * 1e3,  # meV / A
                 name + "_final_rel_rmse_f": metrics["rel_rmse_f"],
             }
+            if metrics.get("mae_h") is not None:
+                wandb_log_dict[name + "_final_mae_h"] = metrics["mae_h"] * 1e3
+            if metrics.get("mae_h_diag") is not None:
+                wandb_log_dict[name + "_final_mae_h_diag"] = (
+                    metrics["mae_h_diag"] * 1e3
+                )
+            if metrics.get("mae_h_off_diag") is not None:
+                wandb_log_dict[name + "_final_mae_h_off_diag"] = (
+                    metrics["mae_h_off_diag"] * 1e3
+                )
             wandb.log(wandb_log_dict)
         if table_type == "TotalRMSE":
             table.add_row(

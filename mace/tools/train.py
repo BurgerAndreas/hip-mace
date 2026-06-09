@@ -327,7 +327,7 @@ def train(
                 log_data["train/lr"] = lr
             wandb.log(log_data, step=epoch)
         # Validate
-        if epoch % eval_interval == 0:
+        if epoch > 0 and (epoch % eval_interval == 0):
             model_to_evaluate = (
                 model if distributed_model is None else distributed_model
             )

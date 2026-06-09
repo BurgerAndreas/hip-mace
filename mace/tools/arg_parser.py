@@ -289,19 +289,6 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=64,
     )
     parser.add_argument(
-        "--hessian_use_last_layer_only",
-        help="Use only last layer features for Hessian prediction",
-        type=str2bool,
-        default=True,
-    )
-    parser.add_argument(
-        "--hessian_head_type",
-        help="HIP Hessian head implementation to use",
-        type=str,
-        default="legacy",
-        choices=["legacy", "graph"],
-    )
-    parser.add_argument(
         "--hessian_fully_connected",
         help="Use a fully connected directed Hessian graph within each molecule",
         type=str2bool,
@@ -312,43 +299,6 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         help="Cutoff radius for Hessian graph (Angstrom)",
         type=float,
         default=16.0,
-    )
-    parser.add_argument(
-        "--hessian_edge_lmax",
-        help="Max l for spherical harmonics used in Hessian edge features (2 or 3)",
-        type=int,
-        default=3,
-    )
-    parser.add_argument(
-        "--hessian_use_radial",
-        help="Use radial embeddings for distance-dependent Hessian edge features",
-        type=str2bool,
-        default=True,
-    )
-    parser.add_argument(
-        "--hessian_aggregation",
-        help="Aggregation method for combining layer features: 'mean', 'learnable'",
-        type=str,
-        default="learnable",
-        choices=["mean", "learnable"],
-    )
-    parser.add_argument(
-        "--hessian_separate_radial_network",
-        help="Use a separate radial network (MLP) for Hessian (not shared with energy)",
-        type=str2bool,
-        default=True,
-    )
-    parser.add_argument(
-        "--hessian_diag_norm",
-        help="Use equivariant layer norm for diagonal features in HIP Hessian",
-        type=str2bool,
-        default=False,
-    )
-    parser.add_argument(
-        "--hessian_off_diag_norm",
-        help="Use equivariant layer norm for off-diagonal features in HIP Hessian",
-        type=str2bool,
-        default=False,
     )
     parser.add_argument(
         "--hessian_radial_MLP",

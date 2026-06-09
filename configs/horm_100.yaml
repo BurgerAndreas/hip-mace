@@ -17,17 +17,19 @@ distributed: false
 launcher: slurm
 log_level: INFO
 plot: true
-error_table: TotalMAE # TotalMAEHessian
+error_table: TotalMAEHessian
+save_all_checkpoints: true
 
 # ====== Model ======
 model: MACE
-r_max: 5.0
+r_max: 7.0
+num_radial_basis: 16
 max_ell: 3
 correlation: 3
 num_interactions: 2
-MLP_irreps: "16x0e"
+MLP_irreps: "16x0e" # energy readout
 radial_MLP: "[64, 64, 64]"
-hidden_irreps: "128x0e + 128x1o + 128x2e"
+hidden_irreps: "128x0e + 128x1e + 128x1o + 128x2e"
 edge_irreps: null
 max_L: null
 avg_num_neighbors: 12.876944541931152
@@ -35,7 +37,12 @@ compute_avg_num_neighbors: false
 compute_forces: true
 
 # ====== HIP / Hessian prediction ======
-hip: false
+hip: true
+hessian_fully_connected: true
+num_interactions_hessian: 1
+hessian_hidden_irreps: "128x0e + 128x1e + 128x1o + 128x2e"
+hessian_pair_conditioned_offdiag: false
+hessian_dedicated_pair_offdiag: false
 
 
 # ====== Dataset ======
@@ -61,29 +68,29 @@ forces_key: forces
 hessian_key: hessian # for HIP
 
 # ====== Loss and optimization ======
-loss: l1l2energyforces # weighted = MSE for both energy and forces
-hessian_weight: 100.0
-forces_weight: 100.0
+loss: l1l2l1energyforceshessian
+hessian_weight: 10.0
+forces_weight: 25.0
 energy_weight: 1.0
 virials_weight: 1.0
-optimizer: adam
+optimizer: adamw
 beta: 0.9
-batch_size: 64
-valid_batch_size: 64
+batch_size: 100
+valid_batch_size: 100
 lr: 0.01
 weight_decay: 0.0
 amsgrad: true
-scheduler: ReduceLROnPlateau # CosineAnnealingLR
-lr_factor: 0.8
-scheduler_patience: 4000
-lr_scheduler_gamma: 0.9993
-warmup_epochs: 100
-min_lr: 0.0001
+scheduler: CosineAnnealingLR # CosineAnnealingLR
+# lr_factor: 0.8
+# scheduler_patience: 4000
+# lr_scheduler_gamma: 0.9993
+warmup_epochs: 1000
+min_lr: 0.00001
 swa: false
 ema: false
 ema_decay: 0.99
-max_num_epochs: 100000
 patience: 2048
+max_num_epochs: 10000
 eval_interval: 1000
 
 # ====== Acceleration options ======

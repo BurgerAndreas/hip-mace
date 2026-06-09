@@ -137,9 +137,7 @@ def test_hip_mace():
         # Added for HIP Hessian prediction
         hip=True,
         hessian_feature_dim=16,
-        hessian_use_last_layer_only=True,
         hessian_r_max=16.0,
-        hessian_edge_lmax=3, # 2 or 3
     )
     model = modules.MACE(**model_config)
     model.to(device=device)

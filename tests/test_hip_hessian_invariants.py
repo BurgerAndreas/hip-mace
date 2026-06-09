@@ -47,9 +47,7 @@ def hip_model_fixture():
         radial_type="bessel",
         hip=True,
         hessian_feature_dim=4,
-        hessian_use_last_layer_only=True,
         hessian_r_max=16.0,
-        hessian_edge_lmax=2,
     )
     model.eval()
     return model
@@ -102,15 +100,12 @@ def test_hip_hessian_is_symmetric(hip_model):
     assert torch.allclose(hessian, hessian.T, atol=1e-6, rtol=1e-6)
 
 
-def test_hip_hessian_row_sums_are_zero(hip_model):
+def test_hip_hessian_row_sums_are_not_projected_to_zero(hip_model):
     hessian = _predict_hessian(hip_model, POSITIONS)
+    row_sums = hessian.sum(dim=1)
 
-    assert torch.allclose(
-        hessian.sum(dim=1),
-        torch.zeros(hessian.shape[0], dtype=hessian.dtype),
-        atol=1e-6,
-        rtol=0.0,
-    )
+    assert torch.isfinite(row_sums).all()
+    assert not torch.allclose(row_sums, torch.zeros_like(row_sums), atol=1e-6, rtol=0.0)
 
 
 def test_hip_hessian_is_translation_invariant(hip_model):
@@ -148,15 +143,17 @@ def test_hip_hessian_is_rotation_equivariant(hip_model):
     )
 
 
-def test_hip_hessian_has_near_zero_acoustic_modes(hip_model):
+def test_hip_hessian_acoustic_modes_are_not_projected(hip_model):
     hessian = _predict_hessian(hip_model, POSITIONS)
     translations = torch.eye(3, dtype=hessian.dtype).repeat(len(POSITIONS), 1)
+    translation_residual = hessian @ translations
     eigenvalues = torch.linalg.eigvalsh((hessian + hessian.T) / 2)
 
-    assert torch.allclose(
-        hessian @ translations,
+    assert torch.isfinite(translation_residual).all()
+    assert torch.isfinite(eigenvalues).all()
+    assert not torch.allclose(
+        translation_residual,
         torch.zeros_like(translations),
         atol=1e-6,
         rtol=0.0,
     )
-    assert torch.all(eigenvalues.abs().sort().values[:3] < 1e-5)

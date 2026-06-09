@@ -364,36 +364,6 @@ def blocks3x3_to_hessian(
     return hessian
 
 
-def enforce_hessian_translation_invariance(
-    hessian: torch.Tensor, natoms: torch.Tensor
-) -> torch.Tensor:
-    """
-    Project each graph Hessian out of the global translation subspace.
-
-    This applies P kron I_3 on both sides, where P removes the per-graph
-    atom-wise mean. The result has zero block row/column sums and therefore
-    three acoustic translation modes at zero.
-    """
-    hessian_chunks = []
-    offset = 0
-    for num_atoms_tensor in natoms.to(device=hessian.device, dtype=torch.long):
-        num_atoms = int(num_atoms_tensor.item())
-        num_coords = num_atoms * 3
-        num_entries = num_coords * num_coords
-        hessian_block = hessian[offset : offset + num_entries].reshape(
-            num_atoms, 3, num_atoms, 3
-        )
-        hessian_block = (
-            hessian_block
-            - hessian_block.mean(dim=0, keepdim=True)
-            - hessian_block.mean(dim=2, keepdim=True)
-            + hessian_block.mean(dim=(0, 2), keepdim=True)
-        )
-        hessian_chunks.append(hessian_block.reshape(-1))
-        offset += num_entries
-    return torch.cat(hessian_chunks, dim=0)
-
-
 def blocks3x3_to_hessian_loops(
     edge_index: torch.Tensor,
     data: TGBatch,

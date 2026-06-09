@@ -25,12 +25,7 @@ def _get_hessian_model_options(args):
     return {
         "hip": args.hip,
         "hessian_feature_dim": args.hessian_feature_dim,
-        "hessian_use_last_layer_only": args.hessian_use_last_layer_only,
         "hessian_r_max": args.hessian_r_max,
-        "hessian_edge_lmax": args.hessian_edge_lmax,
-        "hessian_use_radial": args.hessian_use_radial,
-        "hessian_aggregation": args.hessian_aggregation,
-        "hessian_separate_radial_network": args.hessian_separate_radial_network,
         "hessian_radial_MLP": _parse_optional_literal_list(args.hessian_radial_MLP),
         "hessian_use_edge_gates": args.hessian_use_edge_gates,
         "hessian_pair_conditioned_offdiag": args.hessian_pair_conditioned_offdiag,
@@ -45,9 +40,6 @@ def _get_hessian_model_options(args):
             if args.hessian_hidden_irreps
             else None
         ),
-        "hessian_diag_norm": args.hessian_diag_norm,
-        "hessian_off_diag_norm": args.hessian_off_diag_norm,
-        "hessian_head_type": args.hessian_head_type,
         "hessian_fully_connected": args.hessian_fully_connected,
     }
 
@@ -203,7 +195,7 @@ def configure_model(
         logging.info(f"Hidden irreps: {args.hidden_irreps}")
 
         # Check if HIP is enabled and backbone has no 1e features
-        if args.hip and args.hessian_head_type == "legacy":
+        if args.hip:
             hidden_irreps_parsed = o3.Irreps(args.hidden_irreps)
             has_1e = any(irrep.ir.l == 1 and irrep.ir.p == 1 for irrep in hidden_irreps_parsed)
             hessian_has_1e = False

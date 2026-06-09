@@ -40,5 +40,8 @@ results_evalhorm/
 .benchmarks
 *.png
 
+slurmlog/
+outslurm/
+
 **/*.model
 .github

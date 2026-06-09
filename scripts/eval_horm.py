@@ -9,40 +9,32 @@ from tqdm import tqdm
 
 from mace import data, modules, tools
 
-from mace.modules.frequency_analysis import analyze_frequencies_np, Z_TO_ATOM_SYMBOL
-from mace.tools.torch_tools import to_numpy
-from mace.tools.checkpoint import CheckpointIO, CheckpointBuilder
-from mace.calculators.mace import MACECalculator
+from mace.modules.frequency_analysis import (
+    Z_TO_ATOM_SYMBOL,
+    analyze_frequencies_np,
+)
+# from mace.tools.checkpoint import CheckpointIO, CheckpointBuilder
+# from mace.calculators.mace import MACECalculator
 from mace.tools.run_train_utils import (
-    combine_datasets,
+    # combine_datasets,
     load_dataset_for_path,
     normalize_file_paths,
 )
 from mace.tools.scripts_utils import check_path_ase_read
 from mace.tools.multihead_tools import (
     HeadConfig,
-    apply_pseudolabels_to_pt_head_configs,
-    assemble_replay_data,
-    dict_head_to_dataclass,
-    prepare_default_head,
-    prepare_pt_head,
 )
 from mace.data import KeySpecification, update_keyspec_from_kwargs
 
 import argparse
-from typing import Dict
 import yaml
 
-import ase.data
-import ase.io
 import numpy as np
 import torch
-from e3nn import o3
 import glob
 
 from mace import data
 from mace.cli.convert_e3nn_cueq import run as run_e3nn_to_cueq
-from mace.modules.utils import extract_invariant
 from mace.tools import torch_geometric, torch_tools, utils
 
 
@@ -339,8 +331,8 @@ def evaluate_hessian_on_horm_dataset(
         
         # Analyze frequency & Eckart (mass weighting)
         true_freqs = analyze_frequencies_np(
-            hessian=to_numpy(hessian_true),
-            cart_coords=to_numpy(batch["positions"]),
+            hessian=hessian_true,
+            cart_coords=batch["positions"],
             atomsymbols=symbols,
         )
         true_neg_num = true_freqs["neg_num"]
@@ -348,8 +340,8 @@ def evaluate_hessian_on_horm_dataset(
         true_eigvals_eckart = torch.tensor(true_freqs["eigvals"])
 
         freqs_model = analyze_frequencies_np(
-            hessian=to_numpy(hessian_model),
-            cart_coords=to_numpy(batch["positions"]),
+            hessian=hessian_model,
+            cart_coords=batch["positions"],
             atomsymbols=symbols,
         )
         freqs_model_neg_num = freqs_model["neg_num"]

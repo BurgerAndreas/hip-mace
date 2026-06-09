@@ -216,6 +216,7 @@ def run_conversion(
     h5_prefix: str,
     r_max: float,
     shard_size: int = 10000,
+    skip_statistics: bool = False,
 ):
     input_path = resolve_input_path(input_path)
 
@@ -257,6 +258,15 @@ def run_conversion(
 
     pbar.close()
     tprint(f"Wrote {total_written} configs across {num_shards} shards to {out_dir}")
+
+    if skip_statistics:
+        tprint("Skipping dataset statistics computation")
+        orig_size = get_size_bytes(input_path)
+        new_size = get_size_bytes(out_dir)
+        tprint(f"Original LMDB size: {human_readable(orig_size)}")
+        tprint(f"Sharded HDF5 size: {human_readable(new_size)} ({num_shards} files)")
+        tprint(f"Output directory: {os.path.abspath(out_dir)}")
+        return
 
     # Compute dataset statistics
     tprint(f"Computing dataset statistics with r_max={r_max}")
@@ -303,8 +313,19 @@ def main():
     parser.add_argument("--h5_prefix", default=None, help="Output directory for HDF5 shards")
     parser.add_argument("--r_max", default=5.0, type=float, help="Cutoff radius for computing statistics.")
     parser.add_argument("--shard_size", default=10000, type=int, help="Configs per HDF5 shard file")
+    parser.add_argument(
+        "--skip_statistics",
+        action="store_true",
+        help="Only write HDF5 shards; skip the post-conversion statistics pass.",
+    )
     args = parser.parse_args()
-    run_conversion(args.in_file, args.h5_prefix, args.r_max, args.shard_size)
+    run_conversion(
+        args.in_file,
+        args.h5_prefix,
+        args.r_max,
+        args.shard_size,
+        args.skip_statistics,
+    )
 
 
 if __name__ == "__main__":

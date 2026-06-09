@@ -37,6 +37,7 @@ dependencies = [
     "wandb",
     "muon-optimizer @ git+https://github.com/KellerJordan/Muon",
     "pytest",
+    "torch-geometric>=2.8.0",
 ]
 
 # Make isort compatible with black

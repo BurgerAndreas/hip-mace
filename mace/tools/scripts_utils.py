@@ -322,14 +322,9 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
             {
                 "hip": model.hip,
                 "hessian_feature_dim": getattr(model, "hessian_feature_dim", 64),
-                "hessian_use_last_layer_only": getattr(
-                    model, "hessian_use_last_layer_only", True
-                ),
                 "hessian_r_max": getattr(model, "hessian_r_max").item()
                 if hasattr(model, "hessian_r_max")
                 else 16.0,
-                "hessian_edge_lmax": getattr(model, "hessian_edge_lmax", 3),
-                "hessian_head_type": getattr(model, "hessian_head_type", "legacy"),
                 "hessian_fully_connected": getattr(
                     model, "hessian_fully_connected", False
                 ),
@@ -338,10 +333,6 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
                 ),
                 "hessian_hidden_irreps": getattr(
                     model, "hessian_message_irreps", None
-                ),
-                "hessian_diag_norm": getattr(model, "hessian_diag_norm", False),
-                "hessian_off_diag_norm": getattr(
-                    model, "hessian_off_diag_norm", False
                 ),
             }
         )
