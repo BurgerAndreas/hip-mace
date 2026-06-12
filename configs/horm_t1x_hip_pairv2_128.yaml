@@ -1,5 +1,5 @@
 # ====== Name and seed ======
-name: horm_t1x_hip_pair_mace_256
+name: horm_t1x_hip_pairv2_128
 seed: 42
 
 # ====== Directories ======
@@ -22,13 +22,14 @@ save_all_checkpoints: true
 
 # ====== Model ======
 model: MACE
-r_max: 5.0
+r_max: 7.0
+num_radial_basis: 16
 max_ell: 3
 correlation: 3
 num_interactions: 2
 MLP_irreps: "16x0e"
 radial_MLP: "[64, 64, 64]"
-hidden_irreps: "256x0e + 256x1e + 256x1o + 256x2e"
+hidden_irreps: "128x0e + 128x1e + 128x1o + 128x2e"
 edge_irreps: null
 max_L: null
 avg_num_neighbors: 12.876944541931152
@@ -37,13 +38,11 @@ compute_forces: true
 
 # ====== HIP / Hessian prediction ======
 hip: true
-hessian_head_type: pair_mace_v1
+hessian_head_type: pair_v2
 hessian_feature_dim: 128
 hessian_fully_connected: true
 num_interactions_hessian: 1
-hessian_hidden_irreps: "256x0e + 256x1e + 256x1o + 256x2e"
-hessian_pair_conditioned_offdiag: false
-hessian_dedicated_pair_offdiag: false
+hessian_hidden_irreps: "128x0e + 128x1e + 128x1o + 128x2e"
 
 
 # ====== Dataset ======
@@ -54,7 +53,7 @@ max_valid_samples: 1000
 samples_per_epoch: 20000 # stop the epoch early after this many samples
 test_file: null
 test_dir: null
-num_workers: 0
+num_workers: 4
 pin_memory: true
 atomic_numbers: "[1, 6, 7, 8, 9]"
 mean: -611.9894409179688
@@ -71,29 +70,26 @@ hessian_key: hessian # for HIP
 
 # ====== Loss and optimization ======
 loss: l1l2l1energyforceshessian # weighted = MSE for both energy and forces
-hessian_weight: 100.0
-forces_weight: 100.0
+hessian_weight: 10.0 # 100.0
+forces_weight: 25.0 # 100.0
 energy_weight: 1.0
 virials_weight: 0.0
 optimizer: adamw
 beta: 0.9
 batch_size: 128
 valid_batch_size: 128
-lr: 0.00044
-weight_decay: 1e-5
-amsgrad: false
+lr: 0.01 # 0.1
+weight_decay: 0 # 5e-7
+# amsgrad: true
 scheduler: CosineAnnealingLR
-lr_factor: 0.8
-scheduler_patience: 30
-lr_scheduler_gamma: 0.9993
 warmup_epochs: 50
-min_lr: 0.0001
+min_lr: 0.00001
 swa: false # stochastic weight averaging
 ema: false # exponential moving average
 ema_decay: 0.99
 max_num_epochs: 500
 patience: 2048
-eval_interval: 20
+eval_interval: 25
 
 # ====== Acceleration options ======
 enable_cueq: false

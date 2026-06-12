@@ -948,6 +948,7 @@ def run(args) -> Dict[str, Any]:
     restart_lbfgs = False
     opt_start_epoch = None
     if args.restart_latest:
+        logging.info("Attempting to restart from the latest checkpoint")
         try:
             opt_start_epoch = checkpoint_handler.load_latest(
                 state=tools.CheckpointState(model, optimizer, lr_scheduler, scaler),
@@ -965,6 +966,9 @@ def run(args) -> Dict[str, Any]:
                 restart_lbfgs = True
         if opt_start_epoch is not None:
             start_epoch = opt_start_epoch
+            logging.info(f"Restarting training from checkpoint epoch {start_epoch}")
+        else:
+            logging.info("No restart checkpoint loaded; starting training from scratch")
 
     ema: Optional[ExponentialMovingAverage] = None
     if args.ema:
@@ -987,6 +991,7 @@ def run(args) -> Dict[str, Any]:
             )
             if opt_start_epoch is not None:
                 start_epoch = opt_start_epoch
+                logging.info(f"Restarting LBFGS training from checkpoint epoch {start_epoch}")
 
     if args.wandb:
         logging.info("Using Weights and Biases for logging")
@@ -1023,9 +1028,12 @@ def run(args) -> Dict[str, Any]:
             name=args.wandb_name,
             config=wandb_config,
             dir=args.wandb_dir,
-            resume="allow",
+            resume="must" if wandb_run_id else "allow",
             id=wandb_run_id,
         )
+        wandb.define_metric("epoch")
+        wandb.define_metric("train/*", step_metric="epoch")
+        wandb.define_metric("valid/*", step_metric="epoch")
         wandb.run.summary["params"] = args_dict_json
         # write the wandb run id to file
         with open(os.path.join(args.checkpoints_dir, "wandb_run_id.txt"), "w") as f:

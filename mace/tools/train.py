@@ -12,6 +12,7 @@ from contextlib import nullcontext
 from typing import Any, Dict, List, Optional, Tuple, Union
 import warnings
 import os
+import signal
 import sys
 import wandb
 
@@ -218,14 +219,13 @@ def train(
     swa_start = True
     keep_last = False
     if log_wandb:
-        data_log = {
+        wandb.run.summary.update({
             "data/train_samples": len(train_loader.dataset),
-        }
+        })
         for valid_loader_name, valid_loader in valid_loaders.items():
-            data_log[f"data/valid_samples/{valid_loader_name}"] = len(
+            wandb.run.summary[f"data/valid_samples/{valid_loader_name}"] = len(
                 valid_loader.dataset
             )
-        wandb.log(data_log, step=0)
 
     if max_grad_norm is not None:
         logging.info(f"Using gradient clipping with tolerance={max_grad_norm:.3f}")
@@ -235,7 +235,60 @@ def train(
         slurm_job_id = os.environ["SLURM_JOB_ID"]
         print(f"SLURM job ID: {slurm_job_id}")
         if log_wandb:
-            wandb.log({"slurm_job_id": slurm_job_id}, step=0)
+            wandb.run.summary["slurm_job_id"] = slurm_job_id
+
+    preemption_state = {"requested": False, "signum": None}
+
+    def _request_preemption_checkpoint(signum, _frame):
+        preemption_state["requested"] = True
+        preemption_state["signum"] = signum
+        logging.warning(
+            "Received signal %s; will save a checkpoint at the next safe point.",
+            signum,
+        )
+
+    previous_signal_handlers = {}
+    for signal_name in ("SIGUSR1", "SIGTERM"):
+        signum = getattr(signal, signal_name, None)
+        if signum is None:
+            continue
+        try:
+            previous_signal_handlers[signum] = signal.getsignal(signum)
+            signal.signal(signum, _request_preemption_checkpoint)
+        except (OSError, RuntimeError, ValueError) as exc:
+            logging.debug("Could not install %s handler: %s", signal_name, exc)
+
+    def _preemption_requested() -> bool:
+        return bool(preemption_state["requested"])
+
+    def _save_preemption_checkpoint(checkpoint_epoch: int) -> None:
+        if rank != 0:
+            return
+        if not save_checkpoints:
+            logging.warning(
+                "Preemption requested but checkpoint saving is disabled; exiting without a new checkpoint."
+            )
+            return
+        logging.warning(
+            "Saving preemption checkpoint at epoch %s before exiting.",
+            checkpoint_epoch,
+        )
+        param_context = ema.average_parameters() if ema is not None else nullcontext()
+        with param_context:
+            checkpoint_handler.save(
+                state=CheckpointState(model, optimizer, lr_scheduler, scaler),
+                epochs=checkpoint_epoch,
+                keep_last=True,
+            )
+
+    def _exit_after_preemption_checkpoint(checkpoint_epoch: int) -> None:
+        _save_preemption_checkpoint(checkpoint_epoch)
+        if distributed:
+            torch.distributed.barrier()
+        logging.warning("Exiting after preemption checkpoint; batch script will requeue.")
+        for signum, handler in previous_signal_handlers.items():
+            signal.signal(signum, handler)
+        raise SystemExit(0)
 
     logging.info("")
     logging.info("===========TRAINING===========")
@@ -259,8 +312,13 @@ def train(
             valid_loss_head, eval_metrics, logger, log_errors, None, valid_loader_name
         )
     valid_loss = valid_loss_head  # consider only the last head for the checkpoint
+    if _preemption_requested():
+        _exit_after_preemption_checkpoint(epoch)
 
     while epoch < max_num_epochs:
+        if _preemption_requested():
+            _exit_after_preemption_checkpoint(epoch)
+
         # LR scheduler and SWA update
         if swa is None or epoch < swa.start:
             if epoch > start_epoch:
@@ -302,10 +360,13 @@ def train(
             scaler=scaler,
             amp_enabled=amp_enabled,
             amp_dtype=amp_dtype,
+            should_stop=_preemption_requested,
         )
         epoch_time = time.time() - epoch_start_time
         if distributed:
             torch.distributed.barrier()
+        if _preemption_requested():
+            _exit_after_preemption_checkpoint(epoch)
         if log_wandb:
             # Try to get the learning rate
             lr = None
@@ -321,11 +382,12 @@ def train(
             log_data = {
                 "train/loss": avg_epoch_loss,
                 "train/epoch": epoch,
+                "epoch": epoch,
                 "train/time_per_epoch": epoch_time,
             }
             if lr is not None:
                 log_data["train/lr"] = lr
-            wandb.log(log_data, step=epoch)
+            wandb.log(log_data)
         # Validate
         if epoch > 0 and (epoch % eval_interval == 0):
             model_to_evaluate = (
@@ -366,6 +428,7 @@ def train(
                                 # ],
                                 # "valid_rmse_f": eval_metrics["rmse_f"],
                             }
+                            wandb_log_dict["epoch"] = epoch
                             # if "mae_h" in eval_metrics:
                             #     wandb_log_dict[valid_loader_name]["valid_mae_h"] = eval_metrics["mae_h"]
                             _name = "valid"
@@ -382,7 +445,7 @@ def train(
                     valid_loss_head  # consider only the last head for the checkpoint
                 )
             if log_wandb:
-                wandb.log(wandb_log_dict, step=epoch)
+                wandb.log(wandb_log_dict)
             if rank == 0:
                 if valid_loss >= lowest_loss:
                     patience_counter += 1
@@ -406,7 +469,7 @@ def train(
                         )
                         with param_context:
                             checkpoint_handler.save(
-                                state=CheckpointState(model, optimizer, lr_scheduler),
+                                state=CheckpointState(model, optimizer, lr_scheduler, scaler),
                                 epochs=epoch,
                                 keep_last=True,
                             )
@@ -420,7 +483,7 @@ def train(
                     if save_checkpoints:
                         with param_context:
                             checkpoint_handler.save(
-                                state=CheckpointState(model, optimizer, lr_scheduler),
+                                state=CheckpointState(model, optimizer, lr_scheduler, scaler),
                                 epochs=epoch,
                                 keep_last=keep_last,
                             )
@@ -450,6 +513,7 @@ def train_one_epoch(
     scaler: Optional[torch.cuda.amp.GradScaler] = None,
     amp_enabled: bool = False,
     amp_dtype: torch.dtype = torch.float32,
+    should_stop=None,
 ) -> float:
     model_to_train = model if distributed_model is None else distributed_model
 
@@ -479,6 +543,8 @@ def train_one_epoch(
             logger.log(opt_metrics)
     else:
         for batch in data_loader:
+            if should_stop is not None and should_stop():
+                break
             if samples_per_epoch is not None and total_samples >= samples_per_epoch:
                 break
             loss, opt_metrics = take_step(
@@ -501,6 +567,8 @@ def train_one_epoch(
             opt_metrics["epoch"] = epoch
             if rank == 0:
                 logger.log(opt_metrics)
+            if should_stop is not None and should_stop():
+                break
             if samples_per_epoch is not None and total_samples >= samples_per_epoch:
                 break
     avg_loss = total_loss / max(total_samples, 1)
@@ -689,6 +757,7 @@ def evaluate(
     # Initialize eckart metrics accumulators if hessians are predicted
     eckart_eigval_maes = []
     eckart_eigvec_cosines = []
+    eckart_frequency_skipped = 0
     
     # Get z_table from model for converting node_attrs to atomic numbers
     z_table = None
@@ -745,25 +814,37 @@ def evaluate(
                 fraction_zero_hessian = num_zero.item() / num_total
                 aux["fraction_zero_hessian_list"].append(fraction_zero_hessian)
 
-                # Extract positions for this sample
-                positions = batch.positions[batch.ptr[i]:batch.ptr[i+1]] # (N, 3)
+                # Frequency analysis is diagnostic only. Keep it on CPU so a
+                # failed eigensolve does not poison the CUDA validation stream.
+                positions = batch.positions[batch.ptr[i]:batch.ptr[i+1]].detach().cpu() # (N, 3)
+                hessian_pred_cpu = hessian_pred.detach().cpu()
+                hessian_true_cpu = hessian_true.detach().cpu()
 
                 # Convert node_attrs to atomic numbers
                 node_attrs_sample = batch.node_attrs[batch.ptr[i]:batch.ptr[i+1]] # (N, Z_table.num_z)
-                atomic_numbers = torch.tensor([z_table.index_to_z(z) for z in node_attrs_sample.argmax(dim=-1)], device=device)
-                symbols = [Z_TO_ATOM_SYMBOL[z.item()] for z in atomic_numbers]
+                atomic_number_indices = node_attrs_sample.argmax(dim=-1).detach().cpu().tolist()
+                symbols = [Z_TO_ATOM_SYMBOL[z_table.index_to_z(z)] for z in atomic_number_indices]
 
-                # Analyze frequencies with eckart projection using torch version
-                freqs_pred = analyze_frequencies_torch(
-                    hessian=hessian_pred,
-                    cart_coords=positions,
-                    atomsymbols=symbols,
-                )
-                freqs_true = analyze_frequencies_torch(
-                    hessian=hessian_true,
-                    cart_coords=positions,
-                    atomsymbols=symbols,
-                )
+                try:
+                    # Analyze frequencies with eckart projection using torch version
+                    freqs_pred = analyze_frequencies_torch(
+                        hessian=hessian_pred_cpu,
+                        cart_coords=positions,
+                        atomsymbols=symbols,
+                    )
+                    freqs_true = analyze_frequencies_torch(
+                        hessian=hessian_true_cpu,
+                        cart_coords=positions,
+                        atomsymbols=symbols,
+                    )
+                except Exception as exc:  # pylint: disable=broad-exception-caught
+                    eckart_frequency_skipped += 1
+                    logging.debug(
+                        "Skipping frequency analysis for validation sample %s: %s",
+                        i,
+                        exc,
+                    )
+                    continue
 
                 # Compute eckart eigenvalue MAEs for j=0 (mode 1) and j=1 (mode 2)
                 eigvals_pred = freqs_pred["eigvals"]
@@ -819,6 +900,9 @@ def evaluate(
                 aux["eckart_eigvec_cos"] = np.nanmean(arr)
             else:
                 aux["eckart_eigvec_cos"] = float("nan")
+
+    if eckart_frequency_skipped:
+        aux["eckart_frequency_skipped_samples"] = eckart_frequency_skipped
 
     metrics.reset()
 

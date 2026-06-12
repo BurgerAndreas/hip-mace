@@ -329,10 +329,14 @@ def evaluate_hessian_on_horm_dataset(
         batch["z"] = torch.tensor([z_table.index_to_z(z) for z in batch["node_attrs"].argmax(dim=-1)])
         symbols = [Z_TO_ATOM_SYMBOL[z.item()] for z in batch["z"]]
         
-        # Analyze frequency & Eckart (mass weighting)
+        # Analyze frequency & Eckart (mass weighting). The frequency helper is
+        # NumPy-based, so move tensors off CUDA before calling into it.
+        hessian_true_np = hessian_true.detach().cpu().numpy()
+        hessian_model_np = hessian_model.detach().cpu().numpy()
+        positions_np = batch["positions"].detach().cpu().numpy()
         true_freqs = analyze_frequencies_np(
-            hessian=hessian_true,
-            cart_coords=batch["positions"],
+            hessian=hessian_true_np,
+            cart_coords=positions_np,
             atomsymbols=symbols,
         )
         true_neg_num = true_freqs["neg_num"]
@@ -340,8 +344,8 @@ def evaluate_hessian_on_horm_dataset(
         true_eigvals_eckart = torch.tensor(true_freqs["eigvals"])
 
         freqs_model = analyze_frequencies_np(
-            hessian=hessian_model,
-            cart_coords=batch["positions"],
+            hessian=hessian_model_np,
+            cart_coords=positions_np,
             atomsymbols=symbols,
         )
         freqs_model_neg_num = freqs_model["neg_num"]

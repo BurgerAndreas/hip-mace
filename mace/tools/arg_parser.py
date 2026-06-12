@@ -1061,7 +1061,13 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         "--restart_latest",
         help="restart optimizer from latest checkpoint",
         action="store_true",
-        default=False,
+        default=True,
+    )
+    parser.add_argument(
+        "--no_restart_latest",
+        help="start from scratch instead of restarting from latest checkpoint",
+        action="store_false",
+        dest="restart_latest",
     )
     parser.add_argument(
         "--save_cpu",
