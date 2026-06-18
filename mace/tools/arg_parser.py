@@ -774,6 +774,12 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         type=str,
         default="pt_head",
     )
+    parser.add_argument(
+        "--final_eval",
+        help="Run final train/validation/test evaluation after training completes",
+        type=str2bool,
+        default=True,
+    )
 
     # Loss and optimization
     parser.add_argument(
@@ -793,7 +799,17 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
             "energy_forces_dipole",
             "l1l2energyforces",
             "l1l2l1energyforceshessian", # for HIP
+            "maeenergyforceshessian", # total-energy/component-force/component-Hessian MAE for HIP
         ],
+    )
+    parser.add_argument(
+        "--overwrite_loss",
+        help=(
+            "For HIP runs, preserve the historical behavior of replacing the "
+            "configured loss with l1l2l1energyforceshessian."
+        ),
+        type=str2bool,
+        default=True,
     )
     parser.add_argument(
         "--forces_weight", help="weight of forces loss", type=float, default=100.0

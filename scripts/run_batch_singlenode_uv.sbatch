@@ -7,7 +7,7 @@
 #SBATCH --mem=64G
 #SBATCH -t 4:00:00
 #SBATCH --requeue
-#SBATCH --signal=B:USR1@300
+#SBATCH --signal=B:USR1@1800
 #SBATCH --output=/lustre/fs12/portfolios/nvr/projects/nvr_qualg_lmbm/users/anburger/hip-mace/outslurm/slurm-%j.out
 
 set -euo pipefail
@@ -53,33 +53,70 @@ if [[ "$is_training_run" == true && "$has_restart_arg" == false ]]; then
 fi
 
 child_pid=""
-preemption_grace_seconds="${HIP_MACE_PREEMPTION_GRACE_SECONDS:-240}"
+preemption_grace_seconds="${HIP_MACE_PREEMPTION_GRACE_SECONDS:-1500}"
+termination_grace_seconds="${HIP_MACE_TERMINATION_GRACE_SECONDS:-30}"
+preemption_exit_code="${HIP_MACE_PREEMPTION_EXIT_CODE:-75}"
+
+signal_child() {
+  local signal_name="$1"
+  if [[ -z "$child_pid" ]] || ! kill -0 "$child_pid" 2>/dev/null; then
+    return
+  fi
+
+  if kill -0 -- "-$child_pid" 2>/dev/null; then
+    kill "-$signal_name" -- "-$child_pid" 2>/dev/null || true
+  else
+    kill "-$signal_name" "$child_pid" 2>/dev/null || true
+  fi
+}
+
+wait_for_child_exit() {
+  local deadline="$1"
+  while kill -0 "$child_pid" 2>/dev/null && (( SECONDS < deadline )); do
+    sleep 5
+  done
+}
+
+finish_after_preemption_signal() {
+  local child_status="$1"
+  if [[ "$is_training_run" == true && "$child_status" -eq "$preemption_exit_code" ]]; then
+    echo "Child saved a preemption checkpoint and exited with code ${child_status}; requeueing job ${SLURM_JOB_ID}." >&2
+    scontrol requeue "$SLURM_JOB_ID"
+    exit 0
+  fi
+
+  echo "Child exited with code ${child_status} after pre-timeout signal; not requeueing." >&2
+  exit "$child_status"
+}
+
 requeue_before_timeout() {
-  trap - USR1 TERM
-  echo "Received pre-timeout signal for job ${SLURM_JOB_ID}; asking child to checkpoint before requeueing." >&2
+  trap - USR1
+  echo "Received pre-timeout signal for job ${SLURM_JOB_ID}; asking child to checkpoint." >&2
   if [[ -n "$child_pid" ]] && kill -0 "$child_pid" 2>/dev/null; then
-    if kill -0 -- "-$child_pid" 2>/dev/null; then
-      kill -USR1 -- "-$child_pid" 2>/dev/null || true
-    else
-      kill -USR1 "$child_pid" 2>/dev/null || true
-    fi
+    signal_child USR1
 
     deadline=$((SECONDS + preemption_grace_seconds))
-    while kill -0 "$child_pid" 2>/dev/null && (( SECONDS < deadline )); do
-      sleep 5
-    done
+    wait_for_child_exit "$deadline"
 
     if kill -0 "$child_pid" 2>/dev/null; then
-      echo "Child did not exit after ${preemption_grace_seconds}s; terminating before requeue." >&2
-      if kill -0 -- "-$child_pid" 2>/dev/null; then
-        kill -TERM -- "-$child_pid" 2>/dev/null || true
-      else
-        kill -TERM "$child_pid" 2>/dev/null || true
+      echo "Child did not exit after ${preemption_grace_seconds}s; terminating without automatic requeue unless it saves a checkpoint." >&2
+      signal_child TERM
+      deadline=$((SECONDS + termination_grace_seconds))
+      wait_for_child_exit "$deadline"
+      if kill -0 "$child_pid" 2>/dev/null; then
+        echo "Child did not exit after TERM; killing process group and not requeueing." >&2
+        signal_child KILL
       fi
     fi
-    wait "$child_pid" 2>/dev/null || true
+
+    set +e
+    wait "$child_pid"
+    child_status=$?
+    set -e
+    finish_after_preemption_signal "$child_status"
   fi
-  scontrol requeue "$SLURM_JOB_ID"
+
+  echo "No running child found after pre-timeout signal; not requeueing." >&2
   exit 0
 }
 

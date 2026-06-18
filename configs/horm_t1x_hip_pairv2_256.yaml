@@ -90,6 +90,7 @@ ema_decay: 0.99
 max_num_epochs: 500
 patience: 2048
 eval_interval: 25
+final_eval: false
 
 # ====== Acceleration options ======
 enable_cueq: false

@@ -968,14 +968,16 @@ def run(args) -> Dict[str, Any]:
             start_epoch = opt_start_epoch
             logging.info(f"Restarting training from checkpoint epoch {start_epoch}")
         else:
+            if int(os.environ.get("SLURM_RESTART_COUNT", "0")) > 0:
+                raise RuntimeError(
+                    "Requeued SLURM job could not find a checkpoint in "
+                    f"{args.checkpoints_dir}; refusing to restart from epoch 0."
+                )
             logging.info("No restart checkpoint loaded; starting training from scratch")
 
     ema: Optional[ExponentialMovingAverage] = None
     if args.ema:
         ema = ExponentialMovingAverage(model.parameters(), decay=args.ema_decay)
-    else:
-        for group in optimizer.param_groups:
-            group["lr"] = args.lr
 
     if args.lbfgs:
         logging.info("Switching optimizer to LBFGS")
@@ -1119,6 +1121,10 @@ def run(args) -> Dict[str, Any]:
         amp_enabled=amp_enabled,
         amp_dtype=amp_dtype,
     )
+
+    if not args.final_eval:
+        logging.info("Final evaluation disabled; skipping post-training metrics and plots.")
+        return
 
     logging.info("")
     logging.info("===========RESULTS===========")

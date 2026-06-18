@@ -53,6 +53,7 @@ warnings.filterwarnings(
 
 # Store command line arguments as a string
 CMD_LINE_ARGS = " ".join(sys.argv)
+PREEMPTION_CHECKPOINT_EXIT_CODE = 75
 
 
 @dataclasses.dataclass
@@ -61,6 +62,60 @@ class SWAContainer:
     scheduler: SWALR
     start: int
     loss_fn: torch.nn.Module
+
+
+def _nan_count(value: Any) -> Tuple[int, int]:
+    if value is None or isinstance(value, (str, bytes, bool)):
+        return 0, 0
+    if isinstance(value, torch.Tensor):
+        if value.numel() == 0:
+            return 0, 0
+        return int(torch.isnan(value).sum().item()), int(value.numel())
+    try:
+        values = np.asarray(value, dtype=float)
+    except (TypeError, ValueError):
+        return 0, 0
+    if values.size == 0:
+        return 0, 0
+    return int(np.isnan(values).sum()), int(values.size)
+
+
+def _raise_if_validation_mostly_nan(
+    valid_loss: Any,
+    eval_metrics: Dict[str, Any],
+    valid_loader_name: str,
+    epoch: Optional[int],
+) -> None:
+    nan_count, value_count = _nan_count(valid_loss)
+    metric_nan_counts = {}
+    for key, value in eval_metrics.items():
+        if key in {"time", "mode", "epoch", "head"}:
+            continue
+        metric_nans, metric_values = _nan_count(value)
+        if metric_values:
+            metric_nan_counts[key] = (metric_nans, metric_values)
+            nan_count += metric_nans
+            value_count += metric_values
+
+    mostly_nan = value_count > 0 and nan_count > value_count / 2
+    if mostly_nan:
+        nan_metrics = [
+            f"{key}={metric_nans}/{metric_values}"
+            for key, (metric_nans, metric_values) in metric_nan_counts.items()
+            if metric_nans
+        ]
+        epoch_label = "initial validation" if epoch is None else f"epoch {epoch}"
+        message = (
+            f"Validation for head {valid_loader_name!r} at {epoch_label} is mostly NaN "
+            f"({nan_count}/{value_count} numeric values)."
+        )
+        if nan_metrics:
+            message += " NaN metrics: " + ", ".join(nan_metrics)
+        try:
+            assert False, message
+        except AssertionError as exc:
+            raise RuntimeError(message) from exc
+        raise RuntimeError(message)
 
 
 def valid_err_log(
@@ -261,14 +316,14 @@ def train(
     def _preemption_requested() -> bool:
         return bool(preemption_state["requested"])
 
-    def _save_preemption_checkpoint(checkpoint_epoch: int) -> None:
+    def _save_preemption_checkpoint(checkpoint_epoch: int) -> bool:
         if rank != 0:
-            return
+            return True
         if not save_checkpoints:
             logging.warning(
                 "Preemption requested but checkpoint saving is disabled; exiting without a new checkpoint."
             )
-            return
+            return False
         logging.warning(
             "Saving preemption checkpoint at epoch %s before exiting.",
             checkpoint_epoch,
@@ -280,15 +335,22 @@ def train(
                 epochs=checkpoint_epoch,
                 keep_last=True,
             )
+        return True
 
     def _exit_after_preemption_checkpoint(checkpoint_epoch: int) -> None:
-        _save_preemption_checkpoint(checkpoint_epoch)
+        checkpoint_saved = _save_preemption_checkpoint(checkpoint_epoch)
         if distributed:
             torch.distributed.barrier()
-        logging.warning("Exiting after preemption checkpoint; batch script will requeue.")
+        if not checkpoint_saved:
+            logging.warning("Exiting after preemption request without requeue signal.")
+            raise SystemExit(1)
+        logging.warning(
+            "Exiting after preemption checkpoint with code %s; batch script will requeue.",
+            PREEMPTION_CHECKPOINT_EXIT_CODE,
+        )
         for signum, handler in previous_signal_handlers.items():
             signal.signal(signum, handler)
-        raise SystemExit(0)
+        raise SystemExit(PREEMPTION_CHECKPOINT_EXIT_CODE)
 
     logging.info("")
     logging.info("===========TRAINING===========")
@@ -307,6 +369,9 @@ def train(
             device=device,
             amp_enabled=amp_enabled,
             amp_dtype=amp_dtype,
+        )
+        _raise_if_validation_mostly_nan(
+            valid_loss_head, eval_metrics, valid_loader_name, None
         )
         valid_err_log(
             valid_loss_head, eval_metrics, logger, log_errors, None, valid_loader_name
@@ -409,6 +474,9 @@ def train(
                         device=device,
                         amp_enabled=amp_enabled,
                         amp_dtype=amp_dtype,
+                    )
+                    _raise_if_validation_mostly_nan(
+                        valid_loss_head, eval_metrics, valid_loader_name, epoch
                     )
                     if rank == 0:
                         valid_err_log(

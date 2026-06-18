@@ -25,7 +25,11 @@ def check_args(args):
 
     # Directories
     # Use work_dir for all other directories as well, unless they were specified by the user
-    run_id = time.strftime("%Y%m%d_%H%M%S")
+    run_id = os.environ.get("MACE_RUN_ID")
+    if run_id is None and os.environ.get("SLURM_JOB_ID"):
+        run_id = f"slurm-{os.environ['SLURM_JOB_ID']}"
+    if run_id is None:
+        run_id = time.strftime("%Y%m%d_%H%M%S")
     if args.log_dir is None:
         args.log_dir = os.path.join(args.work_dir, "logs", run_id)
     if args.model_dir is None:
@@ -45,7 +49,9 @@ def check_args(args):
     if args.hip:
         if args.error_table not in ["TotalMAEHessian"]:
             args.error_table = "TotalMAEHessian"
-        if args.loss not in ["l1l2l1energyforceshessian"]:
+        if getattr(args, "overwrite_loss", True) and args.loss not in [
+            "l1l2l1energyforceshessian"
+        ]:
             args.loss = "l1l2l1energyforceshessian"
     
     # Store command line arguments as a string
