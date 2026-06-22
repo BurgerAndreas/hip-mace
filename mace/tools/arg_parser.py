@@ -803,15 +803,6 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         ],
     )
     parser.add_argument(
-        "--overwrite_loss",
-        help=(
-            "For HIP runs, preserve the historical behavior of replacing the "
-            "configured loss with l1l2l1energyforceshessian."
-        ),
-        type=str2bool,
-        default=True,
-    )
-    parser.add_argument(
         "--forces_weight", help="weight of forces loss", type=float, default=100.0
     )
     parser.add_argument(

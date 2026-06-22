@@ -70,7 +70,6 @@ hessian_key: hessian # for HIP
 
 # ====== Loss and optimization ======
 loss: maeenergyforceshessian
-overwrite_loss: false
 hessian_weight: 25.0
 forces_weight: 10.0
 energy_weight: 1.0
