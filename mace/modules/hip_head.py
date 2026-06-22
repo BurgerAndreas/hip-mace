@@ -80,6 +80,7 @@ class HIPHeadV2(torch.nn.Module):
         self.register_buffer(
             "hessian_r_max", torch.tensor(hessian_r_max, dtype=torch.get_default_dtype())
         )
+        self.hessian_r_max_value = float(hessian_r_max)
         self.hessian_fully_connected = hessian_fully_connected
         self.num_interactions_hessian = num_interactions_hessian
 
@@ -226,7 +227,7 @@ class HIPHeadV2(torch.nn.Module):
         # Build the (fully-connected) Hessian graph and the scatter indices.
         data = add_hessian_graph_batch(
             data,
-            hessian_r_max=self.hessian_r_max.item(),
+            hessian_r_max=self.hessian_r_max_value,
             use_pbc=None,
             fully_connected=self.hessian_fully_connected,
         )
@@ -343,7 +344,7 @@ class HIPHeadMessageV1(HIPHeadV2):
     ) -> torch.Tensor:
         data = add_hessian_graph_batch(
             data,
-            hessian_r_max=self.hessian_r_max.item(),
+            hessian_r_max=self.hessian_r_max_value,
             use_pbc=None,
             fully_connected=self.hessian_fully_connected,
         )
@@ -496,7 +497,7 @@ class HIPHeadEqV2(HIPHeadV2):
         # Build the (fully-connected) Hessian graph and the scatter indices.
         data = add_hessian_graph_batch(
             data,
-            hessian_r_max=self.hessian_r_max.item(),
+            hessian_r_max=self.hessian_r_max_value,
             use_pbc=None,
             fully_connected=self.hessian_fully_connected,
         )

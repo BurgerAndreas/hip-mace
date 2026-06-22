@@ -1120,6 +1120,7 @@ def run(args) -> Dict[str, Any]:
         scaler=scaler,
         amp_enabled=amp_enabled,
         amp_dtype=amp_dtype,
+        log_interval=args.log_interval,
     )
 
     if not args.final_eval:

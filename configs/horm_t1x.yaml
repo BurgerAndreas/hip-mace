@@ -39,8 +39,8 @@ hip: false
 
 
 # ====== Dataset ======
-train_file: ~/.cache/kagglehub/datasets/yunhonghan/hessian-dataset-for-optimizing-reactive-mliphorm/versions/6/ts1x_hess_train
-valid_file: ~/.cache/kagglehub/datasets/yunhonghan/hessian-dataset-for-optimizing-reactive-mliphorm/versions/6/ts1x-val
+train_file: ./data/ts1x/ts1x_hess_train
+valid_file: ./data/ts1x/ts1x-val
 # valid_fraction: 0.1 # only used when no explicit validation file is given
 max_valid_samples: 1000
 samples_per_epoch: 20000 # stop the epoch early after this many samples

@@ -62,7 +62,7 @@ def fully_connected_hessian_graph_batch(data: TGBatch):
     edge_index = torch.stack((source, target), dim=0)
     edge_distance_vec = positions[source] - positions[target]
     edge_distance = edge_distance_vec.norm(dim=-1, keepdim=True)
-    neighbors = torch.bincount(batch[source], minlength=int(batch.max().item()) + 1)
+    neighbors = torch.bincount(batch[source])
     return edge_index, edge_distance, edge_distance_vec, neighbors
 
 
@@ -218,7 +218,10 @@ def _indexadd_offdiagonal_to_flat_hessian(edge_index, messages, data):
         hessian1d: Tensor, shape (sum_b (N_b*3)^2,).
     """
     # do the same thing in 1d, but indexing messageflat without storing it in values
-    total_entries = int(torch.sum((data["natoms"] * 3) ** 2).item())
+    if "ptr_1d_hessian" in data and data["ptr_1d_hessian"].numel() > 0:
+        total_entries = data["ptr_1d_hessian"][-1]
+    else:
+        total_entries = (data["natoms"] * 3).square().sum()
     hessian1d = torch.zeros(total_entries, device=messages.device, dtype=messages.dtype)
     E = edge_index.shape[1]
     messageflat = messages.reshape(-1)
@@ -566,7 +569,7 @@ def add_hessian_graph_batch(
     data["message_idx_ji"] = (idx_ji_in_sample + edge_hess_offset).reshape(-1)
 
     # 4) Node diagonal indices per sample, vectorized to global
-    total_nodes = int(natoms.sum().item())
+    total_nodes = data["positions"].shape[0]
     if total_nodes > 0:
         # Per-node sample id and local indices
         sample_by_node = data["batch"].to(dtype=torch.long, device=device)

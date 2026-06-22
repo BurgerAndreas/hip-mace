@@ -309,6 +309,7 @@ class MACE(torch.nn.Module):
         self.register_buffer(
             "hessian_r_max", torch.tensor(hessian_r_max, dtype=torch.get_default_dtype())
         )
+        self.hessian_r_max_value = float(hessian_r_max)
         if self.hip and self.hessian_head_type in (
             "pair_v2",
             "eqv2_v1",
@@ -978,7 +979,7 @@ class MACE(torch.nn.Module):
         # Usually the graph is computed in AtomicData.__init__()
         data = add_hessian_graph_batch(
             data,
-            hessian_r_max=self.hessian_r_max.item(),
+            hessian_r_max=self.hessian_r_max_value,
             # max_neighbors=self.max_neighbors,
             # use_pbc=data["pbc"][-1] if len(data["pbc"]) > 3 else data["pbc"],
             use_pbc=None,

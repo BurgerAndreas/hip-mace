@@ -1047,6 +1047,12 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=None,
     )
     parser.add_argument(
+        "--log_interval",
+        help="Log per-step training metrics every N optimizer steps (0 disables)",
+        type=int,
+        default=50,
+    )
+    parser.add_argument(
         "--save_checkpoints",
         help="save checkpoints",
         type=str2bool,

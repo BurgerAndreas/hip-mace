@@ -267,6 +267,7 @@ def train(
     scaler: Optional[torch.cuda.amp.GradScaler] = None,
     amp_enabled: bool = False,
     amp_dtype: torch.dtype = torch.float32,
+    log_interval: int = 50,
 ):
     lowest_loss = np.inf
     valid_loss = np.inf
@@ -426,6 +427,7 @@ def train(
             amp_enabled=amp_enabled,
             amp_dtype=amp_dtype,
             should_stop=_preemption_requested,
+            log_interval=log_interval,
         )
         epoch_time = time.time() - epoch_start_time
         if distributed:
@@ -582,10 +584,11 @@ def train_one_epoch(
     amp_enabled: bool = False,
     amp_dtype: torch.dtype = torch.float32,
     should_stop=None,
+    log_interval: int = 50,
 ) -> float:
     model_to_train = model if distributed_model is None else distributed_model
 
-    total_loss = 0.0
+    total_loss = None
     total_samples = 0
 
     if isinstance(optimizer, LBFGS):
@@ -603,14 +606,15 @@ def train_one_epoch(
             distributed=distributed,
             rank=rank,
         )
-        total_loss = loss
+        total_loss = loss.item() if torch.is_tensor(loss) else float(loss)
         total_samples = len(data_loader)
         opt_metrics["mode"] = "opt"
         opt_metrics["epoch"] = epoch
+        opt_metrics["loss"] = total_loss
         if rank == 0:
             logger.log(opt_metrics)
     else:
-        for batch in data_loader:
+        for step_idx, batch in enumerate(data_loader):
             if should_stop is not None and should_stop():
                 break
             if samples_per_epoch is not None and total_samples >= samples_per_epoch:
@@ -629,17 +633,25 @@ def train_one_epoch(
                 amp_dtype=amp_dtype,
             )
             batch_size = getattr(batch, "num_graphs", 1)
-            total_loss += float(loss) * batch_size
+            if total_loss is None:
+                total_loss = loss.new_zeros(())
+            total_loss = total_loss + loss * batch_size
             total_samples += batch_size
-            opt_metrics["mode"] = "opt"
-            opt_metrics["epoch"] = epoch
-            if rank == 0:
+            if rank == 0 and log_interval > 0 and (
+                step_idx == 0 or (step_idx + 1) % log_interval == 0
+            ):
+                opt_metrics["loss"] = loss.item()
+                opt_metrics["mode"] = "opt"
+                opt_metrics["epoch"] = epoch
+                opt_metrics["step"] = step_idx
                 logger.log(opt_metrics)
             if should_stop is not None and should_stop():
                 break
             if samples_per_epoch is not None and total_samples >= samples_per_epoch:
                 break
-    avg_loss = total_loss / max(total_samples, 1)
+    if total_loss is None:
+        return 0.0
+    avg_loss = (total_loss / max(total_samples, 1)).item()
     return avg_loss
 
 
@@ -701,9 +713,8 @@ def take_step(
     if ema is not None:
         ema.update()
 
-    loss = loss.detach().cpu()
+    loss = loss.detach()
     loss_dict = {
-        "loss": to_numpy(loss),
         "time": time.time() - start_time,
     }
 
@@ -800,11 +811,10 @@ def take_step_lbfgs(
         ema.update()
 
     loss_dict = {
-        "loss": to_numpy(loss),
         "time": time.time() - start_time,
     }
 
-    return loss, loss_dict
+    return loss.detach(), loss_dict
 
 
 def evaluate(
