@@ -9,6 +9,13 @@ from typing import List, Optional
 import torch
 from e3nn import o3
 
+# cuequivariance-torch 0.10 still uses the pre-PyTorch-2.8 name for this
+# tracing predicate. PyTorch 2.8 retained the equivalent is_fx_tracing helper.
+if not hasattr(torch.fx._symbolic_trace, "is_fx_symbolic_tracing"):
+    torch.fx._symbolic_trace.is_fx_symbolic_tracing = (  # type: ignore[attr-defined]
+        torch.fx._symbolic_trace.is_fx_tracing
+    )
+
 from mace.modules.symmetric_contraction import SymmetricContraction
 from mace.tools.cg import O3_e3nn
 from mace.tools.scatter import scatter_sum

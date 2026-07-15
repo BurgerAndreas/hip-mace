@@ -95,7 +95,7 @@ eval_interval: 10
 
 # ====== Acceleration options ======
 enable_cueq: false
-only_cueq: false
+only_cueq: true
 enable_oeq: false
 
 # ====== Weights and Biases ======

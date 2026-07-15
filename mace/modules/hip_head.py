@@ -9,6 +9,7 @@
 # Selected via `hessian_head_type`: pair_v2, eqv2_v1, or message_v1.
 ###########################################################################################
 
+import copy
 from typing import Any, Dict, List, Optional, Type, Union
 
 import torch
@@ -25,7 +26,7 @@ from .hip import (
     irreps_to_cartesian_matrix,
 )
 from .irreps_tools import tp_out_irreps_with_instructions
-from .wrapper_ops import TensorProduct
+from .wrapper_ops import Linear, TensorProduct, TransposeIrrepsLayoutWrapper
 
 
 class HIPHeadV2(torch.nn.Module):
@@ -92,9 +93,17 @@ class HIPHeadV2(torch.nn.Module):
         if hessian_message_irreps == hidden_irreps.simplify():
             self.feature_proj = None
         else:
-            self.feature_proj = o3.Linear(
-                irreps_in=hidden_irreps, irreps_out=hessian_message_irreps
+            self.feature_proj = Linear(
+                irreps_in=hidden_irreps,
+                irreps_out=hessian_message_irreps,
+                cueq_config=cueq_config,
             )
+        self.node_feats_from_cueq = TransposeIrrepsLayoutWrapper(
+            hessian_message_irreps,
+            source="ir_mul",
+            target="mul_ir",
+            cueq_config=cueq_config,
+        )
 
         # ----- Edge geometry on the (fully-connected) Hessian graph -----
         sh_irreps_hessian = o3.Irreps.spherical_harmonics(lmax=2)
@@ -180,6 +189,12 @@ class HIPHeadV2(torch.nn.Module):
             sh_irreps_hessian,
             hessian_out_irreps,
         )
+        # This head needs one output per Hessian edge. CUEQ convolution fusion
+        # includes a receiver scatter and is only valid for node aggregation.
+        edgewise_cueq_config = cueq_config
+        if cueq_config is not None and getattr(cueq_config, "conv_fusion", False):
+            edgewise_cueq_config = copy.copy(cueq_config)
+            edgewise_cueq_config.conv_fusion = False
         self.offdiag_tp = TensorProduct(
             compressed_irreps,
             sh_irreps_hessian,
@@ -187,8 +202,20 @@ class HIPHeadV2(torch.nn.Module):
             instructions=tp_instructions,
             shared_weights=False,
             internal_weights=False,
-            cueq_config=cueq_config,
+            cueq_config=edgewise_cueq_config,
             oeq_config=oeq_config,
+        )
+        self.pair_feats_to_cueq = TransposeIrrepsLayoutWrapper(
+            compressed_irreps,
+            source="mul_ir",
+            target="ir_mul",
+            cueq_config=edgewise_cueq_config,
+        )
+        self.edge_hidden_from_cueq = TransposeIrrepsLayoutWrapper(
+            tp_mid_irreps,
+            source="ir_mul",
+            target="mul_ir",
+            cueq_config=edgewise_cueq_config,
         )
         tp_weight_dim = radial_dim + 2 * node_attr_irreps.dim
         self.offdiag_tp_weights = nn.FullyConnectedNet(
@@ -268,6 +295,8 @@ class HIPHeadV2(torch.nn.Module):
                 sc=sc,
                 node_attrs=data["node_attrs"],
             )
+        if self.node_feats_from_cueq is not None:
+            node_feats = self.node_feats_from_cueq(node_feats)
 
         # Diagonal blocks (per node).
         diag_out = self.proj_nodes(node_feats)
@@ -279,6 +308,8 @@ class HIPHeadV2(torch.nn.Module):
             (node_feats[sender], node_feats[receiver]), dim=-1
         )
         pair_feats = self.pair_compress(pair_feats)
+        if self.pair_feats_to_cueq is not None:
+            pair_feats = self.pair_feats_to_cueq(pair_feats)
 
         tp_weight_inputs = torch.cat(
             (
@@ -293,6 +324,8 @@ class HIPHeadV2(torch.nn.Module):
             tp_weights = tp_weights * envelope_hessian
 
         edge_hidden = self.offdiag_tp(pair_feats, edge_attrs_hessian, tp_weights)
+        if self.edge_hidden_from_cueq is not None:
+            edge_hidden = self.edge_hidden_from_cueq(edge_hidden)
         edge_hidden = self.pre_gate_linear(edge_hidden)
         edge_hidden = self.gate(edge_hidden)
         off_diag_out = self.proj_edges(edge_hidden)
@@ -383,6 +416,8 @@ class HIPHeadMessageV1(HIPHeadV2):
                 sc=sc,
                 node_attrs=data["node_attrs"],
             )
+        if self.node_feats_from_cueq is not None:
+            node_feats = self.node_feats_from_cueq(node_feats)
 
         diag_out = self.proj_nodes(node_feats)
 
@@ -392,6 +427,8 @@ class HIPHeadMessageV1(HIPHeadV2):
             (node_feats[sender], node_feats[receiver]), dim=-1
         )
         pair_feats = self.pair_compress(pair_feats)
+        if self.pair_feats_to_cueq is not None:
+            pair_feats = self.pair_feats_to_cueq(pair_feats)
 
         tp_weight_inputs = torch.cat(
             (
@@ -406,6 +443,8 @@ class HIPHeadMessageV1(HIPHeadV2):
             tp_weights = tp_weights * envelope_hessian
 
         edge_hidden = self.offdiag_tp(pair_feats, edge_attrs_hessian, tp_weights)
+        if self.edge_hidden_from_cueq is not None:
+            edge_hidden = self.edge_hidden_from_cueq(edge_hidden)
         edge_hidden = self.pre_gate_linear(edge_hidden)
         edge_hidden = self.gate(edge_hidden)
 
@@ -538,6 +577,8 @@ class HIPHeadEqV2(HIPHeadV2):
                 sc=sc,
                 node_attrs=data["node_attrs"],
             )
+        if self.node_feats_from_cueq is not None:
+            node_feats = self.node_feats_from_cueq(node_feats)
 
         # Diagonal blocks (per node).
         diag_out = self.proj_nodes(node_feats)
@@ -549,6 +590,8 @@ class HIPHeadEqV2(HIPHeadV2):
             (node_feats[sender], node_feats[receiver]), dim=-1
         )
         pair_feats = self.pair_compress(pair_feats)
+        if self.pair_feats_to_cueq is not None:
+            pair_feats = self.pair_feats_to_cueq(pair_feats)
 
         tp_weight_inputs = torch.cat(
             (
@@ -563,6 +606,8 @@ class HIPHeadEqV2(HIPHeadV2):
             tp_weights = tp_weights * envelope_hessian
 
         edge_hidden = self.offdiag_tp(pair_feats, edge_attrs_hessian, tp_weights)
+        if self.edge_hidden_from_cueq is not None:
+            edge_hidden = self.edge_hidden_from_cueq(edge_hidden)
         edge_hidden = self.pre_gate_linear(edge_hidden)
         edge_hidden = self.gate(edge_hidden)
 
