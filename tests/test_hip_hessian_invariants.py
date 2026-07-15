@@ -24,7 +24,7 @@ SPECIES = np.array([8, 1, 1])
 @pytest.fixture(
     scope="module",
     name="hip_model",
-    params=["legacy", "pair_mace_v1", "pair_v2", "eqv2_v1", "message_v1"],
+    params=["pair_v2", "eqv2_v1", "message_v1"],
 )
 def hip_model_fixture(request):
     torch.manual_seed(1)
@@ -101,8 +101,6 @@ def _block_diagonal_rotation(rotation, num_atoms):
 
 def test_hip_model_head_type_is_configurable(hip_model):
     assert hip_model.hessian_head_type in {
-        "legacy",
-        "pair_mace_v1",
         "pair_v2",
         "eqv2_v1",
         "message_v1",
@@ -172,3 +170,71 @@ def test_hip_hessian_acoustic_modes_are_not_projected(hip_model):
         atol=1e-6,
         rtol=0.0,
     )
+
+
+def test_hip_scalar_energy_tail_adds_scalar_readout_layer():
+    torch.manual_seed(0)
+    base_kwargs = dict(
+        r_max=6.0,
+        num_bessel=4,
+        num_polynomial_cutoff=4,
+        max_ell=2,
+        interaction_cls=modules.interaction_classes[
+            "RealAgnosticResidualInteractionBlock"
+        ],
+        interaction_cls_first=modules.interaction_classes[
+            "RealAgnosticResidualInteractionBlock"
+        ],
+        num_interactions=2,
+        num_elements=len(ATOMIC_NUMBERS),
+        hidden_irreps=o3.Irreps("8x0e + 8x1o + 8x2e"),
+        MLP_irreps=o3.Irreps("8x0e"),
+        gate=torch.nn.functional.silu,
+        atomic_energies=np.zeros(len(ATOMIC_NUMBERS)),
+        avg_num_neighbors=4,
+        atomic_numbers=ATOMIC_NUMBERS,
+        correlation=2,
+        radial_type="bessel",
+        hip=True,
+        hessian_feature_dim=4,
+        hessian_head_type="pair_v2",
+        hessian_r_max=16.0,
+    )
+    model_plain = modules.MACE(**base_kwargs)
+    model_tail = modules.MACE(**base_kwargs, hip_scalar_energy_tail=True)
+
+    assert len(model_plain.interactions) == 2
+    assert len(model_tail.interactions) == 3
+    assert len(model_plain.readouts) == 2
+    assert len(model_tail.readouts) == 3
+    assert str(model_tail.products[-1].linear.irreps_out) == "8x0e"
+
+    config = data.Configuration(
+        atomic_numbers=SPECIES,
+        positions=POSITIONS,
+        properties={
+            "energy": 0.0,
+            "forces": np.zeros_like(POSITIONS),
+        },
+        property_weights={"energy": 1.0, "forces": 1.0},
+    )
+    atomic_data = data.AtomicData.from_config(
+        config,
+        z_table=tools.AtomicNumberTable(ATOMIC_NUMBERS),
+        cutoff=model_tail.r_max.item(),
+    )
+    batch = next(
+        iter(
+            torch_geometric.dataloader.DataLoader(
+                [atomic_data],
+                batch_size=1,
+                shuffle=False,
+            )
+        )
+    )
+    model_tail.eval()
+    out = model_tail(batch, predict_hessian=True)
+    assert out["energy"].shape == (1,)
+    assert out["forces"].shape == POSITIONS.shape
+    hessian = out["hessian"].reshape(len(POSITIONS) * 3, len(POSITIONS) * 3)
+    assert hessian.shape == (len(POSITIONS) * 3, len(POSITIONS) * 3)

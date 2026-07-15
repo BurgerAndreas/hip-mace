@@ -275,10 +275,16 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=False,
     )
 
-    # HIP / Hessian prediction options (match to models.py lines 83–97)
+    # HIP / Hessian prediction options
     parser.add_argument(
         "--hip",
         help="Enable HIP Hessian prediction (internal flag)",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
+        "--hip_scalar_energy_tail",
+        help="Append scalar-only interaction+product+readout for energy while keeping full backbone irreps for HIP",
         type=str2bool,
         default=False,
     )
@@ -291,9 +297,9 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--hessian_head_type",
         help="HIP Hessian head implementation to use",
-        choices=["legacy", "pair_mace_v1", "pair_v2", "eqv2_v1", "message_v1"],
+        choices=["pair_v2", "eqv2_v1", "message_v1"],
         type=str,
-        default="legacy",
+        default="pair_v2",
     )
     parser.add_argument(
         "--hessian_fully_connected",
@@ -312,48 +318,6 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         help="Radial MLP architecture for Hessian (as Python list, e.g. '[64,64,64]')",
         type=str,
         default=None,
-    )
-    parser.add_argument(
-        "--hessian_use_edge_gates",
-        help="Add equivariant gating on off-diagonal features in HIP Hessian",
-        type=str2bool,
-        default=False,
-    )
-    parser.add_argument(
-        "--hessian_pair_conditioned_offdiag",
-        help="Use raw edge messages plus sender/receiver node features, species attrs, radial features, and edge spherical harmonics in the HIP off-diagonal projection",
-        type=str2bool,
-        default=False,
-    )
-    parser.add_argument(
-        "--hessian_dedicated_pair_offdiag",
-        help="Use a dedicated sender/receiver pair representation for HIP off-diagonal blocks instead of raw pre-aggregation interaction messages",
-        type=str2bool,
-        default=False,
-    )
-    parser.add_argument(
-        "--hessian_pair_mace_offdiag",
-        help="Add a MACE-style tensor-product sender/receiver pair residual to HIP off-diagonal blocks",
-        type=str2bool,
-        default=False,
-    )
-    parser.add_argument(
-        "--hessian_offdiag_edge_interaction",
-        help="Replace HIP off-diagonal blocks with a MACE-style edge interaction head",
-        type=str2bool,
-        default=False,
-    )
-    parser.add_argument(
-        "--hessian_offdiag_use_tensor_product",
-        help="Add a parity-correct (node 1o) ⊗ (edge 1o) tensor-product path for off-diagonal HIP Hessian features (enables learning 1e even if backbone has no 1e)",
-        type=str2bool,
-        default=True,
-    )
-    parser.add_argument(
-        "--hessian_offdiag_use_tensor_product_l2",
-        help="Add a (node 2e) ⊗ (edge 2e) tensor-product path for off-diagonal HIP Hessian features (adds 1e mixing)",
-        type=str2bool,
-        default=True,
     )
     parser.add_argument(
         "--num_interactions_hessian",

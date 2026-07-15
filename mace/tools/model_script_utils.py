@@ -24,17 +24,11 @@ def _parse_optional_literal_list(value):
 def _get_hessian_model_options(args):
     return {
         "hip": args.hip,
+        "hip_scalar_energy_tail": args.hip_scalar_energy_tail,
         "hessian_feature_dim": args.hessian_feature_dim,
         "hessian_head_type": args.hessian_head_type,
         "hessian_r_max": args.hessian_r_max,
         "hessian_radial_MLP": _parse_optional_literal_list(args.hessian_radial_MLP),
-        "hessian_use_edge_gates": args.hessian_use_edge_gates,
-        "hessian_pair_conditioned_offdiag": args.hessian_pair_conditioned_offdiag,
-        "hessian_dedicated_pair_offdiag": args.hessian_dedicated_pair_offdiag,
-        "hessian_pair_mace_offdiag": args.hessian_pair_mace_offdiag,
-        "hessian_offdiag_edge_interaction": args.hessian_offdiag_edge_interaction,
-        "hessian_offdiag_use_tensor_product": args.hessian_offdiag_use_tensor_product,
-        "hessian_offdiag_use_tensor_product_l2": args.hessian_offdiag_use_tensor_product_l2,
         "num_interactions_hessian": args.num_interactions_hessian,
         "hessian_hidden_irreps": (
             o3.Irreps(args.hessian_hidden_irreps)
@@ -194,28 +188,6 @@ def configure_model(
         ), "All channels must have the same dimension, use the num_channels and max_L keywords to specify the number of channels and the maximum L"
 
         logging.info(f"Hidden irreps: {args.hidden_irreps}")
-
-        # Check if HIP is enabled and backbone has no 1e features.
-        # The pair_v2 head is exempt: it generates the even 1e channel internally via
-        # its (1o x 1o -> 1e) tensor-product path, so it never requires 1e in the irreps.
-        if args.hip and args.hessian_head_type != "pair_v2":
-            hidden_irreps_parsed = o3.Irreps(args.hidden_irreps)
-            has_1e = any(irrep.ir.l == 1 and irrep.ir.p == 1 for irrep in hidden_irreps_parsed)
-            hessian_has_1e = False
-            if args.hessian_hidden_irreps:
-                hessian_irreps_parsed = o3.Irreps(args.hessian_hidden_irreps)
-                hessian_has_1e = any(
-                    irrep.ir.l == 1 and irrep.ir.p == 1 for irrep in hessian_irreps_parsed
-                )
-            if not has_1e and not hessian_has_1e:
-                assert (
-                    args.hessian_offdiag_use_tensor_product
-                    or args.hessian_offdiag_use_tensor_product_l2
-                ), (
-                    "When HIP is enabled and backbone has no 1e features, "
-                    "enable a tensor-product path (hessian_offdiag_use_tensor_product or "
-                    "hessian_offdiag_use_tensor_product_l2) or provide 1e in hessian_hidden_irreps"
-                )
 
         cueq_config = None
         if args.only_cueq:

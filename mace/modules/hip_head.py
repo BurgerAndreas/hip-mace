@@ -6,8 +6,7 @@
 # mirroring the successful HIP-EquiformerV2 design (concat source+target -> nonlinear
 # message) in the e3nn/MACE framework.
 #
-# These heads are fully independent of the legacy and pair_mace_v1 code paths and
-# of the older hessian_* off-diagonal option flags.
+# Selected via `hessian_head_type`: pair_v2, eqv2_v1, or message_v1.
 ###########################################################################################
 
 from typing import Any, Dict, List, Optional, Type, Union
@@ -116,8 +115,7 @@ class HIPHeadV2(torch.nn.Module):
         edge_feats_irreps = o3.Irreps(f"{radial_dim}x0e")
 
         # ----- Global-context refinement on the Hessian graph (EqV2 hessian_layers analog) -----
-        # Correctly wired to lmax=2 edge spherical harmonics (unlike the legacy path,
-        # which constructs these layers with the main-graph lmax SH but feeds lmax=2).
+        # Correctly wired to lmax=2 edge spherical harmonics.
         num_features = hessian_message_irreps.count(o3.Irrep(0, 1))
         refine_target_irreps = (
             (sh_irreps_hessian * num_features).sort()[0].simplify()

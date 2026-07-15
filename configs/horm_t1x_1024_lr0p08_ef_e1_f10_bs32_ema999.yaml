@@ -1,23 +1,23 @@
 # ====== Name and seed ======
-name: horm100_pair_v2
+name: horm_t1x_1024_lr0p08_ef_e1_f10_bs32_ema999
 seed: 42
 
 # ====== Directories ======
 work_dir: .
-log_dir: null
+log_dir: logs/horm_t1x_1024_lr0p08_ef_e1_f10_bs32_ema999
 model_dir: null
-checkpoints_dir: null
-results_dir: null
+checkpoints_dir: checkpoints/horm_t1x_1024_lr0p08_ef_e1_f10_bs32_ema999
+results_dir: results/horm_t1x_1024_lr0p08_ef_e1_f10_bs32_ema999
 downloads_dir: null
 
 # ====== Device and logging ======
 device: cuda
-default_dtype: float32
+default_dtype: float32 # bfloat16 float32
 distributed: false
 launcher: slurm
 log_level: INFO
 plot: true
-error_table: TotalMAEHessian
+error_table: TotalMAE
 save_all_checkpoints: true
 
 # ====== Model ======
@@ -27,9 +27,9 @@ num_radial_basis: 16
 max_ell: 3
 correlation: 3
 num_interactions: 2
-MLP_irreps: "16x0e" # energy readout
+MLP_irreps: "16x0e"
 radial_MLP: "[64, 64, 64]"
-hidden_irreps: "128x0e + 128x1e + 128x1o + 128x2e"
+hidden_irreps: "1024x0e + 1024x1e + 1024x1o + 1024x2e"
 edge_irreps: null
 max_L: null
 avg_num_neighbors: 12.876944541931152
@@ -37,61 +37,50 @@ compute_avg_num_neighbors: false
 compute_forces: true
 
 # ====== HIP / Hessian prediction ======
-hip: true
-hessian_head_type: pair_v2
-hessian_feature_dim: 128
-hessian_fully_connected: true
-num_interactions_hessian: 1
-hessian_hidden_irreps: "128x0e + 128x1e + 128x1o + 128x2e"
-
+hip: false
 
 # ====== Dataset ======
-train_file: ./data/sample_100.h5
-valid_file: ./data/sample_100.h5
-valid_fraction: 0.1
+train_file: ./data/ts1x/ts1x_hess_train
+valid_file: ./data/ts1x/ts1x-val
+max_valid_samples: 1000
+samples_per_epoch: 20000
 test_file: null
 test_dir: null
-num_workers: 0
+num_workers: 4
 pin_memory: true
 atomic_numbers: "[1, 6, 7, 8, 9]"
 mean: -611.9894409179688
 std: 0.38076332211494446
 statistics_file: null
 les_arguments: null
-# https://gitlab.com/matschreiner/Transition1x/-/blob/main/transition1x/dataloader.py
-# E0s: "{1: 0, 6: 0, 7: 0, 8: 0, 9: 0}"
 E0s: "{1: -13.62222753701504, 6: -1029.4130839658328, 7: -1484.8710358098756, 8: -2041.8396277138045, 9: -2712.8213146878606}"
 
 # ====== Keys ======
 energy_key: energy
 forces_key: forces
-hessian_key: hessian # for HIP
+hessian_key: hessian
 
 # ====== Loss and optimization ======
-loss: l1l2l1energyforceshessian
-hessian_weight: 10.0
-forces_weight: 25.0
+loss: l1l2energyforces
+forces_weight: 10.0
 energy_weight: 1.0
 virials_weight: 0.0
 optimizer: adamw
 beta: 0.9
-batch_size: 100
-valid_batch_size: 100
-lr: 0.01
-weight_decay: 0.0
-amsgrad: true
-scheduler: CosineAnnealingLR # CosineAnnealingLR
-# lr_factor: 0.8
-# scheduler_patience: 4000
-# lr_scheduler_gamma: 0.9993
-warmup_epochs: 1000
+batch_size: 32
+valid_batch_size: 32
+lr: 0.08
+weight_decay: 0
+scheduler: CosineAnnealingLR
+warmup_epochs: 50
 min_lr: 0.00001
 swa: false
-ema: false
+ema: true
 ema_decay: 0.999
+max_num_epochs: 500
 patience: 2048
-max_num_epochs: 10000
 eval_interval: 10
+final_eval: false
 
 # ====== Acceleration options ======
 enable_cueq: false
@@ -103,5 +92,5 @@ wandb: true
 wandb_dir: null
 wandb_project: hip-mace
 wandb_entity: ""
-wandb_name: "horm100_pair_v2"
+wandb_name: horm_t1x_1024_lr0p08_ef_e1_f10_bs32_ema999
 wandb_log_hypers: null

@@ -835,6 +835,11 @@ def evaluate(
     # Initialize eckart metrics accumulators if hessians are predicted
     eckart_eigval_maes = []
     eckart_eigvec_cosines = []
+    eckart_eigval_mae_1_list = []
+    eckart_eigval_mae_2_list = []
+    eckart_eigvec_cos_1_list = []
+    eckart_eigvec_cos_2_list = []
+    fraction_zero_hessian_list = []
     eckart_frequency_skipped = 0
     
     # Get z_table from model for converting node_attrs to atomic numbers
@@ -863,11 +868,10 @@ def evaluate(
 
         # If hessians are predicted, compute eckart metrics
         if output_args["hip"] and output.get("hessian") is not None and batch.hessian is not None and z_table is not None:
-            aux["eckart_eigval_mae_1_list"] = []
-            aux["eckart_eigval_mae_2_list"] = []
-            aux["eckart_eigvec_cos_1_list"] = []
-            aux["eckart_eigvec_cos_2_list"] = []
-            aux["fraction_zero_hessian_list"] = []
+            # NOTE: accumulators (eckart_eigval_mae_1_list etc.) live outside `aux`,
+            # since `aux` is a fresh dict returned by `metrics(...)` on every batch and
+            # gets replaced wholesale by `metrics.compute()` after the loop, which
+            # previously discarded lists stored on it.
             # Loop over samples in batch
             num_graphs = batch.num_graphs
             hessian_offset = 0
@@ -890,7 +894,7 @@ def evaluate(
                 num_zero = torch.sum(hessian_pred == 0)
                 num_total = hessian_pred.numel()
                 fraction_zero_hessian = num_zero.item() / num_total
-                aux["fraction_zero_hessian_list"].append(fraction_zero_hessian)
+                fraction_zero_hessian_list.append(fraction_zero_hessian)
 
                 # Frequency analysis is diagnostic only. Keep it on CPU so a
                 # failed eigensolve does not poison the CUDA validation stream.
@@ -941,12 +945,12 @@ def evaluate(
                     cos_sim_2,
                 ])
                 # Store val MAE for mode 1 and 2 individually
-                aux["eckart_eigval_mae_1_list"].append(eigval_mae_1)
-                aux["eckart_eigval_mae_2_list"].append(eigval_mae_2)
+                eckart_eigval_mae_1_list.append(eigval_mae_1)
+                eckart_eigval_mae_2_list.append(eigval_mae_2)
 
                 # Store vec cosine for mode 1 and 2 individually
-                aux["eckart_eigvec_cos_1_list"].append(cos_sim_1)
-                aux["eckart_eigvec_cos_2_list"].append(cos_sim_2)
+                eckart_eigvec_cos_1_list.append(cos_sim_1)
+                eckart_eigvec_cos_2_list.append(cos_sim_2)
 
         # Limit evaluation to max_samples if specified
         if max_samples is not None:
@@ -961,16 +965,16 @@ def evaluate(
     # Add eckart metrics to aux if computed
     if eckart_eigval_maes:
         aux["eckart_eigval_mae"] = np.mean(eckart_eigval_maes)
-        # Log averages for mode 1 and 2 separately
-        if "eckart_eigval_mae_1_list" in aux and len(aux["eckart_eigval_mae_1_list"]) > 0:
-            aux["eckart_eigval_mae_1"] = np.nanmean(aux["eckart_eigval_mae_1_list"])
-        if "eckart_eigval_mae_2_list" in aux and len(aux["eckart_eigval_mae_2_list"]) > 0:
-            aux["eckart_eigval_mae_2"] = np.nanmean(aux["eckart_eigval_mae_2_list"])
+        # Log averages for mode 1 (lowest mode) and mode 2 separately
+        if eckart_eigval_mae_1_list:
+            aux["eckart_eigval_mae_1"] = np.nanmean(eckart_eigval_mae_1_list)
+        if eckart_eigval_mae_2_list:
+            aux["eckart_eigval_mae_2"] = np.nanmean(eckart_eigval_mae_2_list)
         # Compute cosine averages for mode 1 and 2
-        if "eckart_eigvec_cos_1_list" in aux and len(aux["eckart_eigvec_cos_1_list"]) > 0:
-            aux["eckart_eigvec_cos_1"] = np.nanmean(aux["eckart_eigvec_cos_1_list"])
-        if "eckart_eigvec_cos_2_list" in aux and len(aux["eckart_eigvec_cos_2_list"]) > 0:
-            aux["eckart_eigvec_cos_2"] = np.nanmean(aux["eckart_eigvec_cos_2_list"])
+        if eckart_eigvec_cos_1_list:
+            aux["eckart_eigvec_cos_v1"] = np.nanmean(eckart_eigvec_cos_1_list)
+        if eckart_eigvec_cos_2_list:
+            aux["eckart_eigvec_cos_v2"] = np.nanmean(eckart_eigvec_cos_2_list)
         # For backward compatibility (legacy averaging)
         if eckart_eigvec_cosines:
             arr = np.array(eckart_eigvec_cosines)
@@ -978,6 +982,8 @@ def evaluate(
                 aux["eckart_eigvec_cos"] = np.nanmean(arr)
             else:
                 aux["eckart_eigvec_cos"] = float("nan")
+        if fraction_zero_hessian_list:
+            aux["fraction_zero_hessian"] = np.nanmean(fraction_zero_hessian_list)
 
     if eckart_frequency_skipped:
         aux["eckart_frequency_skipped_samples"] = eckart_frequency_skipped

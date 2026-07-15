@@ -321,7 +321,10 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
         config.update(
             {
                 "hip": model.hip,
-                "hessian_head_type": getattr(model, "hessian_head_type", "legacy"),
+                "hip_scalar_energy_tail": getattr(
+                    model, "hip_scalar_energy_tail", False
+                ),
+                "hessian_head_type": getattr(model, "hessian_head_type", "pair_v2"),
                 "hessian_feature_dim": getattr(model, "hessian_feature_dim", 64),
                 "hessian_r_max": getattr(model, "hessian_r_max").item()
                 if hasattr(model, "hessian_r_max")
@@ -333,7 +336,9 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
                     model, "num_interactions_hessian", 0
                 ),
                 "hessian_hidden_irreps": getattr(
-                    model, "hessian_message_irreps", None
+                    getattr(model, "hessian_head_v2", None),
+                    "hessian_message_irreps",
+                    None,
                 ),
             }
         )

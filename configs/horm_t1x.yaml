@@ -82,10 +82,10 @@ warmup_epochs: 100
 min_lr: 0.0001
 swa: false # stochastic weight averaging
 ema: false # exponential moving average
-ema_decay: 0.99
+ema_decay: 0.999
 max_num_epochs: 1000
 patience: 2048
-eval_interval: 100
+eval_interval: 10
 
 # ====== Acceleration options ======
 enable_cueq: false
@@ -99,4 +99,3 @@ wandb_project: hip-mace
 wandb_entity: ""
 wandb_name: ""
 wandb_log_hypers: null
-
