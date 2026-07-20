@@ -241,6 +241,12 @@ class HIPHeadV2(torch.nn.Module):
             hessian_out_irreps, o3.Irreps("1x0e + 1x1e + 1x2e")
         )
 
+    def _get_hessian_r_max(self) -> float:
+        # Plain attribute may be missing on older pickled heads; buffer is always present.
+        return float(
+            getattr(self, "hessian_r_max_value", float(self.hessian_r_max))
+        )
+
     def forward(
         self,
         data: Dict[str, torch.Tensor],
@@ -252,7 +258,7 @@ class HIPHeadV2(torch.nn.Module):
         # Build the (fully-connected) Hessian graph and the scatter indices.
         data = add_hessian_graph_batch(
             data,
-            hessian_r_max=self.hessian_r_max_value,
+            hessian_r_max=self._get_hessian_r_max(),
             use_pbc=None,
             fully_connected=self.hessian_fully_connected,
         )
@@ -375,7 +381,7 @@ class HIPHeadMessageV1(HIPHeadV2):
     ) -> torch.Tensor:
         data = add_hessian_graph_batch(
             data,
-            hessian_r_max=self.hessian_r_max_value,
+            hessian_r_max=self._get_hessian_r_max(),
             use_pbc=None,
             fully_connected=self.hessian_fully_connected,
         )
@@ -534,7 +540,7 @@ class HIPHeadEqV2(HIPHeadV2):
         # Build the (fully-connected) Hessian graph and the scatter indices.
         data = add_hessian_graph_batch(
             data,
-            hessian_r_max=self.hessian_r_max_value,
+            hessian_r_max=self._get_hessian_r_max(),
             use_pbc=None,
             fully_connected=self.hessian_fully_connected,
         )
