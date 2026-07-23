@@ -35,6 +35,7 @@ import glob
 
 from mace import data
 from mace.cli.convert_e3nn_cueq import run as run_e3nn_to_cueq
+from mace.modules.wrapper_ops import restore_cueq_conv_fusion
 from mace.tools import torch_geometric, torch_tools, utils
 
 
@@ -143,6 +144,7 @@ def evaluate_hessian_on_horm_dataset(
         map_location=args.device,
         weights_only=False,
     )
+    model = restore_cueq_conv_fusion(model)
     if args.enable_cueq:
         print("Converting models to CuEq for acceleration")
         model = run_e3nn_to_cueq(model, device=device)
