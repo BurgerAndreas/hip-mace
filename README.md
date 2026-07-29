@@ -8,6 +8,48 @@ HIP was introduced in our paper https://arxiv.org/abs/2509.21624
 
 The original implementation of HIP for EquiformerV2 is here: https://github.com/BurgerAndreas/hip
 
+## HORM t1x results (512, CuEq, 1000 epochs)
+
+Means over 10k `ts1x-val` samples. Energy / force / Hessian MAE in meV / meV·Å⁻¹ / meV·Å⁻².
+Eigval / eigvec metrics use Eckart (mass-weighted) projection.
+
+| Head | E ↓ | F ↓ | H ↓ | eigval MAE ↓ | 1st eigvec cos mean ↑ | 1st eigvec cos median ↑ |
+|:-----|----:|----:|----:|-------------:|----------------------:|------------------------:|
+| **pair_v2** | **29.2** | **34.0** | **70.4** | **0.0387** | **0.906** | **0.988** |
+| message_v1 | 30.6 | 35.0 | 71.5 | 0.0396 | 0.903 | 0.988 |
+| eqv2_v1 | 35.0 | 37.6 | 74.5 | 0.0414 | 0.901 | 0.986 |
+
+Setup: `hidden_irreps` / hessian head dim 512, `lr=0.08`, loss weights e1 / f10 / h25, batch 64, 100 warmup + 1000 epochs, `only_cueq=true`, HIP predicted Hessians.
+
+### Train
+
+```bash
+# pair_v2 (swap --hessian_head_type for message_v1 or eqv2_v1)
+uv run mace/cli/run_train.py \
+  --config=configs/horm_t1x_hip_pairv2_256.yaml \
+  --name=horm_t1x_hip_pairv2_512_lr0p08_mae_e1_f10_h25_1000_wu100_cueq_bs64 \
+  --loss=maeenergyforceshessian --error_table=TotalMAEHessian \
+  --hidden_irreps='512x0e + 512x1e + 512x1o + 512x2e' \
+  --hessian_feature_dim=512 \
+  --hessian_hidden_irreps='512x0e + 512x1e + 512x1o + 512x2e' \
+  --hessian_head_type=pair_v2 \
+  --lr=0.08 --energy_weight=1 --forces_weight=10 --hessian_weight=25 \
+  --batch_size=64 --valid_batch_size=64 \
+  --max_num_epochs=1000 --warmup_epochs=100 --only_cueq=true \
+  --checkpoints_dir=checkpoints/horm_t1x_hip_pairv2_512_lr0p08_mae_e1_f10_h25_1000_wu100_cueq_bs64 \
+  --log_dir=logs/horm_t1x_hip_pairv2_512_lr0p08_mae_e1_f10_h25_1000_wu100_cueq_bs64 \
+  --results_dir=results/horm_t1x_hip_pairv2_512_lr0p08_mae_e1_f10_h25_1000_wu100_cueq_bs64 \
+  --no_restart_latest
+```
+
+### Eval
+
+```bash
+uv run scripts/eval_horm.py \
+  checkpoints/horm_t1x_hip_pairv2_512_lr0p08_mae_e1_f10_h25_1000_wu100_cueq_bs64 \
+  --max_samples 10000 --valid_file ./data/ts1x/ts1x-val --redo
+```
+
 ### Training HIP-MACE
 
 Setup the environment
