@@ -8,6 +8,31 @@ HIP was introduced in our paper https://arxiv.org/abs/2509.21624
 
 The original implementation of HIP for EquiformerV2 is here: https://github.com/BurgerAndreas/hip
 
+## HORM t1x results (512, CuEq, 1000 epochs)
+
+Means over 10k `ts1x-val` samples. Energy / force / Hessian MAE in meV / meV·Å⁻¹ / meV·Å⁻².
+Eigval / eigvec metrics use Eckart (mass-weighted) projection.
+
+| Head | E ↓ | F ↓ | H ↓ | eigval MAE ↓ | 1st eigvec cos mean ↑ | 1st eigvec cos median ↑ |
+|:-----|----:|----:|----:|-------------:|----------------------:|------------------------:|
+| **pair_v2 (released)** | **29.2** | **34.0** | **70.4** | **0.0387** | **0.906** | **0.988** |
+| message_v1 | 30.6 | 35.0 | 71.5 | 0.0396 | 0.903 | 0.988 |
+| eqv2_v1 | 35.0 | 37.6 | 74.5 | 0.0414 | 0.901 | 0.986 |
+
+`pair_v2` is the released HIP head. The other rows are historical comparisons. Setup: `hidden_irreps` / Hessian head dim 512, `lr=0.08`, loss weights e1 / f10 / h25, batch 64, 100 warmup + 1000 epochs, `only_cueq=true`, HIP predicted Hessians.
+
+### Train on Slurm
+
+```bash
+cd /lustre/fs12/portfolios/nvr/projects/nvr_qualg_lmbm/users/anburger/hip-mace && export HIP_MACE_PROJECT_DIR="$PWD" && sbatch --partition=polar4 --job-name=horm-pairv2-512 scripts/run_batch_singlenode_uv.sbatch mace/cli/run_train.py --config=configs/horm_t1x_hip_pairv2_512_mae.yaml --no_restart_latest
+```
+
+### Evaluate on Slurm
+
+```bash
+cd /lustre/fs12/portfolios/nvr/projects/nvr_qualg_lmbm/users/anburger/hip-mace && export HIP_MACE_PROJECT_DIR="$PWD" && sbatch --partition=polar4 --job-name=eval-pairv2 scripts/run_batch_singlenode_uv.sbatch scripts/eval_horm.py checkpoints/horm_t1x_hip_pairv2_512_lr0p08_mae_e1_f10_h25_1000_wu100_cueq_bs64 --max_samples 10000 --valid_file ./data/ts1x/ts1x-val --redo
+```
+
 ### Training HIP-MACE
 
 Setup the environment
@@ -59,10 +84,9 @@ Compare HIP-MACE to autograd Hessians from regular MACE (will run automatically 
 uv run scripts/eval_horm.py
 ```
 
-Note:
-I recommend you use `--hidden_irreps="128x0e + 128x1e + 128x1o + 128x2e"` instead of the typical `--hidden_irreps="128x0e + 128x1o + 128x2e"`, because we need the even parity `1e` features for the Hessian off-diagonal.
-Alternatively you can use `--num_interactions_hessian=1` and `--hessian_hidden_irreps="128x0e + 128x1e + 128x1o + 128x2e"` or just `hessian_offdiag_use_tensor_product=True`.
+### Ideas
 
+- acoustic/row-sum check: For a true Hessian of a translationally invariant potential, every row block must sum to zero: H_ii = - sum_{j != i} H_ij
 
 ---
 ---

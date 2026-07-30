@@ -57,9 +57,7 @@ def test_hip_mace_equivariance():
         # HIP Specifics
         hip=True,
         hessian_feature_dim=16,
-        hessian_use_last_layer_only=True,
         hessian_r_max=16.0,
-        hessian_edge_lmax=3,
     )
 
     model = modules.MACE(**model_config)

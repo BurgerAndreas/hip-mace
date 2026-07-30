@@ -44,6 +44,28 @@ def irreps_to_cartesian_matrix(irreps: torch.Tensor) -> torch.Tensor:
     )
 
 
+def fully_connected_hessian_graph_batch(data: TGBatch):
+    """Build all directed, non-self edges within each graph in a batch."""
+    device = data["positions"].device
+    positions = data["positions"]
+    batch = data["batch"]
+    num_nodes = positions.shape[0]
+
+    source = torch.arange(num_nodes, device=device, dtype=torch.long).repeat(num_nodes)
+    target = torch.arange(num_nodes, device=device, dtype=torch.long).repeat_interleave(
+        num_nodes
+    )
+    keep = (batch[source] == batch[target]) & (source != target)
+    source = source[keep]
+    target = target[keep]
+
+    edge_index = torch.stack((source, target), dim=0)
+    edge_distance_vec = positions[source] - positions[target]
+    edge_distance = edge_distance_vec.norm(dim=-1, keepdim=True)
+    neighbors = torch.bincount(batch[source])
+    return edge_index, edge_distance, edge_distance_vec, neighbors
+
+
 def add_extra_props_for_hessian(data: TGBatch, offset_indices: bool = True) -> TGBatch:
     """
     Optionally offset precomputed per-sample 1D indices to batched/global space
@@ -196,7 +218,10 @@ def _indexadd_offdiagonal_to_flat_hessian(edge_index, messages, data):
         hessian1d: Tensor, shape (sum_b (N_b*3)^2,).
     """
     # do the same thing in 1d, but indexing messageflat without storing it in values
-    total_entries = int(torch.sum((data["natoms"] * 3) ** 2).item())
+    if "ptr_1d_hessian" in data and data["ptr_1d_hessian"].numel() > 0:
+        total_entries = data["ptr_1d_hessian"][-1]
+    else:
+        total_entries = (data["natoms"] * 3).square().sum()
     hessian1d = torch.zeros(total_entries, device=messages.device, dtype=messages.dtype)
     E = edge_index.shape[1]
     messageflat = messages.reshape(-1)
@@ -342,36 +367,6 @@ def blocks3x3_to_hessian(
     return hessian
 
 
-def enforce_hessian_translation_invariance(
-    hessian: torch.Tensor, natoms: torch.Tensor
-) -> torch.Tensor:
-    """
-    Project each graph Hessian out of the global translation subspace.
-
-    This applies P kron I_3 on both sides, where P removes the per-graph
-    atom-wise mean. The result has zero block row/column sums and therefore
-    three acoustic translation modes at zero.
-    """
-    hessian_chunks = []
-    offset = 0
-    for num_atoms_tensor in natoms.to(device=hessian.device, dtype=torch.long):
-        num_atoms = int(num_atoms_tensor.item())
-        num_coords = num_atoms * 3
-        num_entries = num_coords * num_coords
-        hessian_block = hessian[offset : offset + num_entries].reshape(
-            num_atoms, 3, num_atoms, 3
-        )
-        hessian_block = (
-            hessian_block
-            - hessian_block.mean(dim=0, keepdim=True)
-            - hessian_block.mean(dim=2, keepdim=True)
-            + hessian_block.mean(dim=(0, 2), keepdim=True)
-        )
-        hessian_chunks.append(hessian_block.reshape(-1))
-        offset += num_entries
-    return torch.cat(hessian_chunks, dim=0)
-
-
 def blocks3x3_to_hessian_loops(
     edge_index: torch.Tensor,
     data: TGBatch,
@@ -406,6 +401,7 @@ def add_hessian_graph_batch(
     hessian_r_max: float = 16.0,
     max_neighbors: int = 1_000_000,
     use_pbc: Optional[Tuple[bool, bool, bool]] = None,
+    fully_connected: bool = False,
 ) -> TGBatch:
     """
     Build Hessian graph and precompute globally-offset indices for a batched object.
@@ -434,7 +430,14 @@ def add_hessian_graph_batch(
     data["natoms"] = torch.bincount(data["batch"])
 
     # 1) Generate batched Hessian graph
-    if generate_graph is not None:
+    if fully_connected:
+        (
+            edge_index_hessian,
+            edge_distance_hessian,
+            edge_distance_vec_hessian,
+            neighbors_hessian,
+        ) = fully_connected_hessian_graph_batch(data)
+    elif generate_graph is not None:
         # Use torch_geometric like fairchem / EquiformerV2
         (
             edge_index_hessian,
@@ -566,7 +569,7 @@ def add_hessian_graph_batch(
     data["message_idx_ji"] = (idx_ji_in_sample + edge_hess_offset).reshape(-1)
 
     # 4) Node diagonal indices per sample, vectorized to global
-    total_nodes = int(natoms.sum().item())
+    total_nodes = data["positions"].shape[0]
     if total_nodes > 0:
         # Per-node sample id and local indices
         sample_by_node = data["batch"].to(dtype=torch.long, device=device)

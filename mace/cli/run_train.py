@@ -16,6 +16,7 @@ import sys
 import wandb
 import numpy as np
 
+import torch
 import torch.distributed
 from e3nn.util import jit
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -582,9 +583,6 @@ def run(args) -> Dict[str, Any]:
     """
     This script runs the training/fine tuning for mace
     """
-    # Set environment variable to allow weights_only=False in torch.load
-    os.environ["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] = "1"
-    
     tag = tools.get_tag(name=args.name, seed=args.seed)
     args, input_log_messages = tools.check_args(args)
 
@@ -765,7 +763,9 @@ def run(args) -> Dict[str, Any]:
             model_foundation = calc.models[0]
         else:
             model_foundation = torch.load(
-                args.foundation_model, map_location=args.device
+                args.foundation_model,
+                map_location=args.device,
+                weights_only=False,
             )
             logging.info(
                 f"Using foundation model {args.foundation_model} as initial checkpoint."
@@ -948,6 +948,7 @@ def run(args) -> Dict[str, Any]:
     restart_lbfgs = False
     opt_start_epoch = None
     if args.restart_latest:
+        logging.info("Attempting to restart from the latest checkpoint")
         try:
             opt_start_epoch = checkpoint_handler.load_latest(
                 state=tools.CheckpointState(model, optimizer, lr_scheduler, scaler),
@@ -965,13 +966,18 @@ def run(args) -> Dict[str, Any]:
                 restart_lbfgs = True
         if opt_start_epoch is not None:
             start_epoch = opt_start_epoch
+            logging.info(f"Restarting training from checkpoint epoch {start_epoch}")
+        else:
+            if int(os.environ.get("SLURM_RESTART_COUNT", "0")) > 0:
+                raise RuntimeError(
+                    "Requeued SLURM job could not find a checkpoint in "
+                    f"{args.checkpoints_dir}; refusing to restart from epoch 0."
+                )
+            logging.info("No restart checkpoint loaded; starting training from scratch")
 
     ema: Optional[ExponentialMovingAverage] = None
     if args.ema:
         ema = ExponentialMovingAverage(model.parameters(), decay=args.ema_decay)
-    else:
-        for group in optimizer.param_groups:
-            group["lr"] = args.lr
 
     if args.lbfgs:
         logging.info("Switching optimizer to LBFGS")
@@ -987,6 +993,7 @@ def run(args) -> Dict[str, Any]:
             )
             if opt_start_epoch is not None:
                 start_epoch = opt_start_epoch
+                logging.info(f"Restarting LBFGS training from checkpoint epoch {start_epoch}")
 
     if args.wandb:
         logging.info("Using Weights and Biases for logging")
@@ -1023,9 +1030,12 @@ def run(args) -> Dict[str, Any]:
             name=args.wandb_name,
             config=wandb_config,
             dir=args.wandb_dir,
-            resume="allow",
+            resume="must" if wandb_run_id else "allow",
             id=wandb_run_id,
         )
+        wandb.define_metric("epoch")
+        wandb.define_metric("train/*", step_metric="epoch")
+        wandb.define_metric("valid/*", step_metric="epoch")
         wandb.run.summary["params"] = args_dict_json
         # write the wandb run id to file
         with open(os.path.join(args.checkpoints_dir, "wandb_run_id.txt"), "w") as f:
@@ -1110,7 +1120,12 @@ def run(args) -> Dict[str, Any]:
         scaler=scaler,
         amp_enabled=amp_enabled,
         amp_dtype=amp_dtype,
+        log_interval=args.log_interval,
     )
+
+    if not args.final_eval:
+        logging.info("Final evaluation disabled; skipping post-training metrics and plots.")
+        return
 
     logging.info("")
     logging.info("===========RESULTS===========")

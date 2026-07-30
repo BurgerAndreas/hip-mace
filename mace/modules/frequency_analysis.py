@@ -65,9 +65,21 @@ BOHR2ANG = BOHR2M * 1e10
 ANG2BOHR = 1 / BOHR2ANG
 # Hartree to J
 AU2J = spc.value("Hartree energy")
+# eV to Hartree
+EV2AU = spc.electron_volt / AU2J
+# eV/Angstrom^2 to Hartree/Bohr^2
+EV_PER_ANG2_TO_AU_PER_BOHR2 = EV2AU * BOHR2ANG**2
 # Speed of light in m/s
 C = spc.c
 NA = spc.Avogadro
+
+
+def coords_angstrom_to_bohr(cart_coords):
+    return cart_coords * ANG2BOHR
+
+
+def hessian_ev_per_ang2_to_au_per_bohr2(hessian):
+    return hessian * EV_PER_ANG2_TO_AU_PER_BOHR2
 
 
 def inertia_tensor(coords3d, masses):
@@ -213,7 +225,7 @@ def eigval_to_wavenumber(ev):
     return w2nu
 
 
-def analyze_frequencies_np(
+def analyze_frequencies_np_wavenumbers_hartree_bohr2(
     hessian: np.ndarray | str,  # Hartree/Bohr^2
     cart_coords: np.ndarray,  # Bohr
     atomsymbols: list[str],
@@ -238,6 +250,29 @@ def analyze_frequencies_np(
         "eigvals": eigvals,
         "eigvecs": eigvecs,
         "wavenumbers": wavenumbers,
+        "neg_eigvals": neg_eigvals,
+        "neg_num": neg_num,
+        "natoms": len(atomsymbols),
+    }
+
+def analyze_frequencies_np(
+    hessian: np.ndarray | str,  # any units
+    cart_coords: np.ndarray,  # any units
+    atomsymbols: list[str],
+    ev_thresh: float = -1e-6,
+):
+    proj_hessian = massweigh_and_eckartprojection_np(hessian, cart_coords, atomsymbols)
+    eigvals, eigvecs = np.linalg.eigh(proj_hessian)
+    sorted_inds = np.argsort(eigvals)
+    eigvals = eigvals[sorted_inds]
+    eigvecs = eigvecs[:, sorted_inds]
+
+    neg_inds = eigvals < ev_thresh
+    neg_eigvals = eigvals[neg_inds]
+    neg_num = sum(neg_inds)
+    return {
+        "eigvals": eigvals,
+        "eigvecs": eigvecs,
         "neg_eigvals": neg_eigvals,
         "neg_num": neg_num,
         "natoms": len(atomsymbols),
@@ -406,6 +441,7 @@ def analyze_frequencies_torch(
     neg_inds = eigvals < ev_thresh
     neg_eigvals = eigvals[neg_inds]
     neg_num = sum(neg_inds)
+    # requires wavenumbers
     # # eigval_str = np.array2string(eigvals[:10], precision=4)
     # if neg_num > 0:
     #     wavenumbers = eigval_to_wavenumber(neg_eigvals)

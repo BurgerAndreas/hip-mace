@@ -9,40 +9,33 @@ from tqdm import tqdm
 
 from mace import data, modules, tools
 
-from mace.modules.frequency_analysis import analyze_frequencies_np, Z_TO_ATOM_SYMBOL
-from mace.tools.torch_tools import to_numpy
-from mace.tools.checkpoint import CheckpointIO, CheckpointBuilder
-from mace.calculators.mace import MACECalculator
+from mace.modules.frequency_analysis import (
+    Z_TO_ATOM_SYMBOL,
+    analyze_frequencies_np,
+)
+# from mace.tools.checkpoint import CheckpointIO, CheckpointBuilder
+# from mace.calculators.mace import MACECalculator
 from mace.tools.run_train_utils import (
-    combine_datasets,
+    # combine_datasets,
     load_dataset_for_path,
     normalize_file_paths,
 )
 from mace.tools.scripts_utils import check_path_ase_read
 from mace.tools.multihead_tools import (
     HeadConfig,
-    apply_pseudolabels_to_pt_head_configs,
-    assemble_replay_data,
-    dict_head_to_dataclass,
-    prepare_default_head,
-    prepare_pt_head,
 )
 from mace.data import KeySpecification, update_keyspec_from_kwargs
 
 import argparse
-from typing import Dict
 import yaml
 
-import ase.data
-import ase.io
 import numpy as np
 import torch
-from e3nn import o3
 import glob
 
 from mace import data
 from mace.cli.convert_e3nn_cueq import run as run_e3nn_to_cueq
-from mace.modules.utils import extract_invariant
+from mace.modules.wrapper_ops import restore_cueq_conv_fusion
 from mace.tools import torch_geometric, torch_tools, utils
 
 
@@ -146,7 +139,12 @@ def evaluate_hessian_on_horm_dataset(
     torch_tools.set_default_dtype(args.default_dtype)
 
     # Load model
-    model = torch.load(f=checkpoint_path, map_location=args.device)
+    model = torch.load(
+        f=checkpoint_path,
+        map_location=args.device,
+        weights_only=False,
+    )
+    model = restore_cueq_conv_fusion(model)
     if args.enable_cueq:
         print("Converting models to CuEq for acceleration")
         model = run_e3nn_to_cueq(model, device=device)
@@ -333,10 +331,14 @@ def evaluate_hessian_on_horm_dataset(
         batch["z"] = torch.tensor([z_table.index_to_z(z) for z in batch["node_attrs"].argmax(dim=-1)])
         symbols = [Z_TO_ATOM_SYMBOL[z.item()] for z in batch["z"]]
         
-        # Analyze frequency & Eckart (mass weighting)
+        # Analyze frequency & Eckart (mass weighting). The frequency helper is
+        # NumPy-based, so move tensors off CUDA before calling into it.
+        hessian_true_np = hessian_true.detach().cpu().numpy()
+        hessian_model_np = hessian_model.detach().cpu().numpy()
+        positions_np = batch["positions"].detach().cpu().numpy()
         true_freqs = analyze_frequencies_np(
-            hessian=to_numpy(hessian_true),
-            cart_coords=to_numpy(batch["positions"]),
+            hessian=hessian_true_np,
+            cart_coords=positions_np,
             atomsymbols=symbols,
         )
         true_neg_num = true_freqs["neg_num"]
@@ -344,8 +346,8 @@ def evaluate_hessian_on_horm_dataset(
         true_eigvals_eckart = torch.tensor(true_freqs["eigvals"])
 
         freqs_model = analyze_frequencies_np(
-            hessian=to_numpy(hessian_model),
-            cart_coords=to_numpy(batch["positions"]),
+            hessian=hessian_model_np,
+            cart_coords=positions_np,
             atomsymbols=symbols,
         )
         freqs_model_neg_num = freqs_model["neg_num"]

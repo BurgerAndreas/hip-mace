@@ -22,6 +22,7 @@ from torch.optim.swa_utils import SWALR, AveragedModel
 
 from mace import data, modules, tools
 from mace.data import KeySpecification
+from mace.modules.wrapper_ops import restore_cueq_conv_fusion
 from mace.tools.train import SWAContainer
 
 
@@ -317,6 +318,30 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
         "atomic_inter_shift": shift.cpu().numpy(),
         "heads": heads,
     }
+    if hasattr(model, "hip"):
+        config.update(
+            {
+                "hip": model.hip,
+                "hip_scalar_energy_tail": getattr(
+                    model, "hip_scalar_energy_tail", False
+                ),
+                "hessian_feature_dim": getattr(model, "hessian_feature_dim", 64),
+                "hessian_r_max": getattr(model, "hessian_r_max").item()
+                if hasattr(model, "hessian_r_max")
+                else 16.0,
+                "hessian_fully_connected": getattr(
+                    model, "hessian_fully_connected", False
+                ),
+                "num_interactions_hessian": getattr(
+                    model, "num_interactions_hessian", 0
+                ),
+                "hessian_hidden_irreps": getattr(
+                    getattr(model, "hessian_head_v2", None),
+                    "hessian_message_irreps",
+                    None,
+                ),
+            }
+        )
     if model.__class__.__name__ == "AtomicDielectricMACE":
         config["use_polarizability"] = model.use_polarizability
         config["only_dipole"] = False  # model.only_dipole
@@ -325,9 +350,11 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
 
 
 def extract_load(f: str, map_location: str = "cpu") -> torch.nn.Module:
-    return extract_model(
-        torch.load(f=f, map_location=map_location), map_location=map_location
+    model = extract_model(
+        torch.load(f=f, map_location=map_location, weights_only=False),
+        map_location=map_location,
     )
+    return restore_cueq_conv_fusion(model)
 
 
 def remove_pt_head(
@@ -626,6 +653,12 @@ def get_loss_fn(
         )
     elif args.loss == "l1l2l1energyforceshessian":
         loss_fn = modules.WeightedEnergyForcesHessianL1L2L1Loss(
+            energy_weight=args.energy_weight,
+            forces_weight=args.forces_weight,
+            hessian_weight=args.hessian_weight,
+        )
+    elif args.loss == "maeenergyforceshessian":
+        loss_fn = modules.WeightedEnergyForcesHessianMAELoss(
             energy_weight=args.energy_weight,
             forces_weight=args.forces_weight,
             hessian_weight=args.hessian_weight,

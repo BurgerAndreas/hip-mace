@@ -30,12 +30,14 @@ from .loss import (
     WeightedEnergyForcesDipoleLoss,
     WeightedEnergyForcesL1L2Loss,
     WeightedEnergyForcesHessianL1L2L1Loss,
+    WeightedEnergyForcesHessianMAELoss,
     WeightedEnergyForcesLoss,
     WeightedEnergyForcesStressLoss,
     WeightedEnergyForcesVirialsLoss,
     WeightedForcesLoss,
     WeightedHuberEnergyForcesStressLoss,
 )
+from .hip_head import HIPHeadV2
 from .models import (
     MACE,
     AtomicDielectricMACE,
@@ -105,6 +107,7 @@ __all__ = [
     "GaussianBasis",
     "MACE",
     "ScaleShiftMACE",
+    "HIPHeadV2",
     "AtomicDipolesMACE",
     "AtomicDielectricMACE",
     "EnergyDipolesMACE",
@@ -118,6 +121,7 @@ __all__ = [
     "UniversalLoss",
     "WeightedEnergyForcesL1L2Loss",
     "WeightedEnergyForcesHessianL1L2L1Loss",
+    "WeightedEnergyForcesHessianMAELoss",
     "SymmetricContraction",
     "interaction_classes",
     "compute_mean_std_atomic_inter_energy",

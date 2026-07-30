@@ -7,12 +7,9 @@
 import logging
 
 # pylint: disable=wrong-import-position
-import os
 from glob import glob
 from pathlib import Path
 from typing import List, Union
-
-os.environ["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] = "1"
 
 import numpy as np
 import torch
@@ -22,6 +19,7 @@ from e3nn import o3
 
 from mace import data
 from mace.modules.utils import extract_invariant
+from mace.modules.wrapper_ops import restore_cueq_conv_fusion
 from mace.tools import torch_geometric, torch_tools, utils
 from mace.tools.compile import prepare
 from mace.tools.scripts_utils import extract_model
@@ -194,7 +192,9 @@ class MACECalculator(Calculator):
 
             # Load models from files
             self.models = [
-                torch.load(f=model_path, map_location=device, weights_only=False)
+                restore_cueq_conv_fusion(
+                    torch.load(f=model_path, map_location=device, weights_only=False)
+                )
                 for model_path in model_paths
             ]
 

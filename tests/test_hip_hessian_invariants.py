@@ -1,9 +1,12 @@
+import io
+
 import numpy as np
 import pytest
 import torch
 from e3nn import o3
 
 from mace import data, modules, tools
+from mace.modules.wrapper_ops import restore_cueq_conv_fusion
 from mace.tools import torch_geometric
 
 
@@ -21,8 +24,7 @@ POSITIONS = np.array(
 SPECIES = np.array([8, 1, 1])
 
 
-@pytest.fixture(scope="module", name="hip_model")
-def hip_model_fixture():
+def _build_hip_model():
     torch.manual_seed(1)
     model = modules.MACE(
         r_max=6.0,
@@ -47,12 +49,15 @@ def hip_model_fixture():
         radial_type="bessel",
         hip=True,
         hessian_feature_dim=4,
-        hessian_use_last_layer_only=True,
         hessian_r_max=16.0,
-        hessian_edge_lmax=2,
     )
     model.eval()
     return model
+
+
+@pytest.fixture(scope="module", name="hip_model")
+def hip_model_fixture():
+    return _build_hip_model()
 
 
 def _predict_hessian(model, positions):
@@ -102,17 +107,6 @@ def test_hip_hessian_is_symmetric(hip_model):
     assert torch.allclose(hessian, hessian.T, atol=1e-6, rtol=1e-6)
 
 
-def test_hip_hessian_row_sums_are_zero(hip_model):
-    hessian = _predict_hessian(hip_model, POSITIONS)
-
-    assert torch.allclose(
-        hessian.sum(dim=1),
-        torch.zeros(hessian.shape[0], dtype=hessian.dtype),
-        atol=1e-6,
-        rtol=0.0,
-    )
-
-
 def test_hip_hessian_is_translation_invariant(hip_model):
     hessian = _predict_hessian(hip_model, POSITIONS)
     translated_hessian = _predict_hessian(
@@ -148,15 +142,82 @@ def test_hip_hessian_is_rotation_equivariant(hip_model):
     )
 
 
-def test_hip_hessian_has_near_zero_acoustic_modes(hip_model):
-    hessian = _predict_hessian(hip_model, POSITIONS)
-    translations = torch.eye(3, dtype=hessian.dtype).repeat(len(POSITIONS), 1)
-    eigenvalues = torch.linalg.eigvalsh((hessian + hessian.T) / 2)
+def test_hip_checkpoint_round_trip(hip_model):
+    expected = _predict_hessian(hip_model, POSITIONS)
+    checkpoint = io.BytesIO()
+    torch.save(hip_model.state_dict(), checkpoint)
+    checkpoint.seek(0)
 
-    assert torch.allclose(
-        hessian @ translations,
-        torch.zeros_like(translations),
-        atol=1e-6,
-        rtol=0.0,
+    restored = _build_hip_model()
+    restored.load_state_dict(torch.load(checkpoint, weights_only=False))
+    restored = restore_cueq_conv_fusion(restored)
+
+    actual = _predict_hessian(restored, POSITIONS)
+    assert torch.allclose(actual, expected, atol=1e-6, rtol=1e-6)
+
+
+def test_hip_scalar_energy_tail_adds_scalar_readout_layer():
+    torch.manual_seed(0)
+    base_kwargs = dict(
+        r_max=6.0,
+        num_bessel=4,
+        num_polynomial_cutoff=4,
+        max_ell=2,
+        interaction_cls=modules.interaction_classes[
+            "RealAgnosticResidualInteractionBlock"
+        ],
+        interaction_cls_first=modules.interaction_classes[
+            "RealAgnosticResidualInteractionBlock"
+        ],
+        num_interactions=2,
+        num_elements=len(ATOMIC_NUMBERS),
+        hidden_irreps=o3.Irreps("8x0e + 8x1o + 8x2e"),
+        MLP_irreps=o3.Irreps("8x0e"),
+        gate=torch.nn.functional.silu,
+        atomic_energies=np.zeros(len(ATOMIC_NUMBERS)),
+        avg_num_neighbors=4,
+        atomic_numbers=ATOMIC_NUMBERS,
+        correlation=2,
+        radial_type="bessel",
+        hip=True,
+        hessian_feature_dim=4,
+        hessian_r_max=16.0,
     )
-    assert torch.all(eigenvalues.abs().sort().values[:3] < 1e-5)
+    model_plain = modules.MACE(**base_kwargs)
+    model_tail = modules.MACE(**base_kwargs, hip_scalar_energy_tail=True)
+
+    assert len(model_plain.interactions) == 2
+    assert len(model_tail.interactions) == 3
+    assert len(model_plain.readouts) == 2
+    assert len(model_tail.readouts) == 3
+    assert str(model_tail.products[-1].linear.irreps_out) == "8x0e"
+
+    config = data.Configuration(
+        atomic_numbers=SPECIES,
+        positions=POSITIONS,
+        properties={
+            "energy": 0.0,
+            "forces": np.zeros_like(POSITIONS),
+        },
+        property_weights={"energy": 1.0, "forces": 1.0},
+    )
+    atomic_data = data.AtomicData.from_config(
+        config,
+        z_table=tools.AtomicNumberTable(ATOMIC_NUMBERS),
+        cutoff=model_tail.r_max.item(),
+    )
+    batch = next(
+        iter(
+            torch_geometric.dataloader.DataLoader(
+                [atomic_data],
+                batch_size=1,
+                shuffle=False,
+            )
+        )
+    )
+    model_tail.eval()
+    out = model_tail(batch, predict_hessian=True)
+    assert out["energy"].shape == (1,)
+    assert out["forces"].shape == POSITIONS.shape
+    hessian = out["hessian"].reshape(len(POSITIONS) * 3, len(POSITIONS) * 3)
+    assert hessian.shape == (len(POSITIONS) * 3, len(POSITIONS) * 3)

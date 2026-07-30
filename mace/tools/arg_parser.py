@@ -275,10 +275,16 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=False,
     )
 
-    # HIP / Hessian prediction options (match to models.py lines 83–97)
+    # HIP / Hessian prediction options
     parser.add_argument(
         "--hip",
         help="Enable HIP Hessian prediction (internal flag)",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
+        "--hip_scalar_energy_tail",
+        help="Append scalar-only interaction+product+readout for energy while keeping full backbone irreps for HIP",
         type=str2bool,
         default=False,
     )
@@ -289,8 +295,8 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=64,
     )
     parser.add_argument(
-        "--hessian_use_last_layer_only",
-        help="Use only last layer features for Hessian prediction",
+        "--hessian_fully_connected",
+        help="Use a fully connected directed Hessian graph within each molecule",
         type=str2bool,
         default=False,
     )
@@ -301,77 +307,10 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=16.0,
     )
     parser.add_argument(
-        "--hessian_edge_lmax",
-        help="Max l for spherical harmonics used in Hessian edge features (2 or 3)",
-        type=int,
-        default=3,
-    )
-    parser.add_argument(
-        "--hessian_use_radial",
-        help="Use radial embeddings for distance-dependent Hessian edge features",
-        type=str2bool,
-        default=True,
-    )
-    parser.add_argument(
-        "--hessian_aggregation",
-        help="Aggregation method for combining layer features: 'mean', 'learnable'",
-        type=str,
-        default="learnable",
-        choices=["mean", "learnable"],
-    )
-    parser.add_argument(
-        "--hessian_separate_radial_network",
-        help="Use a separate radial network (MLP) for Hessian (not shared with energy)",
-        type=str2bool,
-        default=True,
-    )
-    parser.add_argument(
-        "--hessian_diag_norm",
-        help="Use equivariant layer norm for diagonal features in HIP Hessian",
-        type=str2bool,
-        default=False,
-    )
-    parser.add_argument(
-        "--hessian_off_diag_norm",
-        help="Use equivariant layer norm for off-diagonal features in HIP Hessian",
-        type=str2bool,
-        default=False,
-    )
-    parser.add_argument(
         "--hessian_radial_MLP",
         help="Radial MLP architecture for Hessian (as Python list, e.g. '[64,64,64]')",
         type=str,
         default=None,
-    )
-    parser.add_argument(
-        "--hessian_use_edge_gates",
-        help="Add equivariant gating on off-diagonal features in HIP Hessian",
-        type=str2bool,
-        default=False,
-    )
-    parser.add_argument(
-        "--hessian_pair_conditioned_offdiag",
-        help="Use raw edge messages plus sender/receiver node features, species attrs, radial features, and edge spherical harmonics in the HIP off-diagonal projection",
-        type=str2bool,
-        default=False,
-    )
-    parser.add_argument(
-        "--hessian_dedicated_pair_offdiag",
-        help="Use a dedicated sender/receiver pair representation for HIP off-diagonal blocks instead of raw pre-aggregation interaction messages",
-        type=str2bool,
-        default=False,
-    )
-    parser.add_argument(
-        "--hessian_offdiag_use_tensor_product",
-        help="Add a parity-correct (node 1o) ⊗ (edge 1o) tensor-product path for off-diagonal HIP Hessian features (enables learning 1e even if backbone has no 1e)",
-        type=str2bool,
-        default=True,
-    )
-    parser.add_argument(
-        "--hessian_offdiag_use_tensor_product_l2",
-        help="Add a (node 2e) ⊗ (edge 2e) tensor-product path for off-diagonal HIP Hessian features (adds 1e mixing)",
-        type=str2bool,
-        default=True,
     )
     parser.add_argument(
         "--num_interactions_hessian",
@@ -792,6 +731,12 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         type=str,
         default="pt_head",
     )
+    parser.add_argument(
+        "--final_eval",
+        help="Run final train/validation/test evaluation after training completes",
+        type=str2bool,
+        default=True,
+    )
 
     # Loss and optimization
     parser.add_argument(
@@ -811,6 +756,7 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
             "energy_forces_dipole",
             "l1l2energyforces",
             "l1l2l1energyforceshessian", # for HIP
+            "maeenergyforceshessian", # total-energy/component-force/component-Hessian MAE for HIP
         ],
     )
     parser.add_argument(
@@ -1058,6 +1004,12 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=None,
     )
     parser.add_argument(
+        "--log_interval",
+        help="Log per-step training metrics every N optimizer steps (0 disables)",
+        type=int,
+        default=50,
+    )
+    parser.add_argument(
         "--save_checkpoints",
         help="save checkpoints",
         type=str2bool,
@@ -1079,7 +1031,13 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         "--restart_latest",
         help="restart optimizer from latest checkpoint",
         action="store_true",
-        default=False,
+        default=True,
+    )
+    parser.add_argument(
+        "--no_restart_latest",
+        help="start from scratch instead of restarting from latest checkpoint",
+        action="store_false",
+        dest="restart_latest",
     )
     parser.add_argument(
         "--save_cpu",

@@ -16,6 +16,7 @@ build/
 # IDE
 .idea/
 .vscode/
+.cursor/
 *.txt
 *.log
 .github/
@@ -40,5 +41,10 @@ results_evalhorm/
 .benchmarks
 *.png
 
+slurmlog/
+outslurm/
+core.*
+
 **/*.model
 .github
+/data/ts1x/

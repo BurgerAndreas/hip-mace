@@ -9,6 +9,13 @@ from typing import List, Optional
 import torch
 from e3nn import o3
 
+# cuequivariance-torch 0.10 still uses the pre-PyTorch-2.8 name for this
+# tracing predicate. PyTorch 2.8 retained the equivalent is_fx_tracing helper.
+if not hasattr(torch.fx._symbolic_trace, "is_fx_symbolic_tracing"):
+    torch.fx._symbolic_trace.is_fx_symbolic_tracing = (  # type: ignore[attr-defined]
+        torch.fx._symbolic_trace.is_fx_tracing
+    )
+
 from mace.modules.symmetric_contraction import SymmetricContraction
 from mace.tools.cg import O3_e3nn
 from mace.tools.scatter import scatter_sum
@@ -126,6 +133,9 @@ def with_scatter_sum(conv_tp: torch.nn.Module) -> torch.nn.Module:
 
 def with_cueq_conv_fusion(conv_tp: torch.nn.Module) -> torch.nn.Module:
     """Wraps a cuet.ConvTensorProduct to use conv fusion"""
+    if hasattr(conv_tp, "original_forward"):
+        return conv_tp
+
     conv_tp.original_forward = conv_tp.forward
     num_segment = conv_tp.m.buffer_num_segments[0]
     num_operands = conv_tp.m.operand_extent
@@ -149,6 +159,29 @@ def with_cueq_conv_fusion(conv_tp: torch.nn.Module) -> torch.nn.Module:
 
     conv_tp.forward = types.MethodType(forward, conv_tp)
     return conv_tp
+
+
+def restore_cueq_conv_fusion(model: torch.nn.Module) -> torch.nn.Module:
+    """Restore fused CuEq forwards that are not retained by torch serialization.
+
+    ``with_cueq_conv_fusion`` installs an instance-level ``forward`` method.
+    PyTorch serializes the underlying ``SegmentedPolynomial`` module but not that
+    method override. Interaction blocks do retain their ``conv_fusion`` marker,
+    so loaded models otherwise call the plain polynomial with the four fused
+    convolution arguments.
+    """
+    if not CUET_AVAILABLE:
+        return model
+
+    for module in model.modules():
+        conv_tp = getattr(module, "conv_tp", None)
+        if (
+            getattr(module, "conv_fusion", False)
+            and isinstance(conv_tp, cuet.SegmentedPolynomial)
+            and not hasattr(conv_tp, "original_forward")
+        ):
+            with_cueq_conv_fusion(conv_tp)
+    return model
 
 
 class TensorProduct:

@@ -12,6 +12,7 @@ from contextlib import nullcontext
 from typing import Any, Dict, List, Optional, Tuple, Union
 import warnings
 import os
+import signal
 import sys
 import wandb
 
@@ -52,6 +53,7 @@ warnings.filterwarnings(
 
 # Store command line arguments as a string
 CMD_LINE_ARGS = " ".join(sys.argv)
+PREEMPTION_CHECKPOINT_EXIT_CODE = 75
 
 
 @dataclasses.dataclass
@@ -60,6 +62,60 @@ class SWAContainer:
     scheduler: SWALR
     start: int
     loss_fn: torch.nn.Module
+
+
+def _nan_count(value: Any) -> Tuple[int, int]:
+    if value is None or isinstance(value, (str, bytes, bool)):
+        return 0, 0
+    if isinstance(value, torch.Tensor):
+        if value.numel() == 0:
+            return 0, 0
+        return int(torch.isnan(value).sum().item()), int(value.numel())
+    try:
+        values = np.asarray(value, dtype=float)
+    except (TypeError, ValueError):
+        return 0, 0
+    if values.size == 0:
+        return 0, 0
+    return int(np.isnan(values).sum()), int(values.size)
+
+
+def _raise_if_validation_mostly_nan(
+    valid_loss: Any,
+    eval_metrics: Dict[str, Any],
+    valid_loader_name: str,
+    epoch: Optional[int],
+) -> None:
+    nan_count, value_count = _nan_count(valid_loss)
+    metric_nan_counts = {}
+    for key, value in eval_metrics.items():
+        if key in {"time", "mode", "epoch", "head"}:
+            continue
+        metric_nans, metric_values = _nan_count(value)
+        if metric_values:
+            metric_nan_counts[key] = (metric_nans, metric_values)
+            nan_count += metric_nans
+            value_count += metric_values
+
+    mostly_nan = value_count > 0 and nan_count > value_count / 2
+    if mostly_nan:
+        nan_metrics = [
+            f"{key}={metric_nans}/{metric_values}"
+            for key, (metric_nans, metric_values) in metric_nan_counts.items()
+            if metric_nans
+        ]
+        epoch_label = "initial validation" if epoch is None else f"epoch {epoch}"
+        message = (
+            f"Validation for head {valid_loader_name!r} at {epoch_label} is mostly NaN "
+            f"({nan_count}/{value_count} numeric values)."
+        )
+        if nan_metrics:
+            message += " NaN metrics: " + ", ".join(nan_metrics)
+        try:
+            assert False, message
+        except AssertionError as exc:
+            raise RuntimeError(message) from exc
+        raise RuntimeError(message)
 
 
 def valid_err_log(
@@ -146,8 +202,19 @@ def valid_err_log(
         error_e = eval_metrics["mae_e"] * 1e3
         error_f = eval_metrics["mae_f"] * 1e3
         error_h = eval_metrics["mae_h"] * 1e3
+        hessian_errors = f"MAE_H={error_h:.2f} meV / A^2"
+        if (
+            eval_metrics.get("mae_h_diag") is not None
+            and eval_metrics.get("mae_h_off_diag") is not None
+        ):
+            error_h_diag = eval_metrics["mae_h_diag"] * 1e3
+            error_h_off_diag = eval_metrics["mae_h_off_diag"] * 1e3
+            hessian_errors += (
+                f", MAE_H_diag={error_h_diag:.2f} meV / A^2, "
+                f"MAE_H_off_diag={error_h_off_diag:.2f} meV / A^2"
+            )
         logging.info(
-            f"{inintial_phrase}: head: {valid_loader_name}, loss={valid_loss:.4f}, MAE_E={error_e:.2f} meV, MAE_F={error_f:.2f} meV / A, MAE_H={error_h:.2f} meV / A^2",
+            f"{inintial_phrase}: head: {valid_loader_name}, loss={valid_loss:.4f}, MAE_E={error_e:.2f} meV, MAE_F={error_f:.2f} meV / A, {hessian_errors}",
         )
     elif log_errors == "DipoleRMSE":
         error_mu = eval_metrics["rmse_mu_per_atom"] * 1e3
@@ -200,6 +267,7 @@ def train(
     scaler: Optional[torch.cuda.amp.GradScaler] = None,
     amp_enabled: bool = False,
     amp_dtype: torch.dtype = torch.float32,
+    log_interval: int = 50,
 ):
     lowest_loss = np.inf
     valid_loss = np.inf
@@ -207,14 +275,13 @@ def train(
     swa_start = True
     keep_last = False
     if log_wandb:
-        data_log = {
+        wandb.run.summary.update({
             "data/train_samples": len(train_loader.dataset),
-        }
+        })
         for valid_loader_name, valid_loader in valid_loaders.items():
-            data_log[f"data/valid_samples/{valid_loader_name}"] = len(
+            wandb.run.summary[f"data/valid_samples/{valid_loader_name}"] = len(
                 valid_loader.dataset
             )
-        wandb.log(data_log, step=0)
 
     if max_grad_norm is not None:
         logging.info(f"Using gradient clipping with tolerance={max_grad_norm:.3f}")
@@ -224,7 +291,67 @@ def train(
         slurm_job_id = os.environ["SLURM_JOB_ID"]
         print(f"SLURM job ID: {slurm_job_id}")
         if log_wandb:
-            wandb.log({"slurm_job_id": slurm_job_id}, step=0)
+            wandb.run.summary["slurm_job_id"] = slurm_job_id
+
+    preemption_state = {"requested": False, "signum": None}
+
+    def _request_preemption_checkpoint(signum, _frame):
+        preemption_state["requested"] = True
+        preemption_state["signum"] = signum
+        logging.warning(
+            "Received signal %s; will save a checkpoint at the next safe point.",
+            signum,
+        )
+
+    previous_signal_handlers = {}
+    for signal_name in ("SIGUSR1", "SIGTERM"):
+        signum = getattr(signal, signal_name, None)
+        if signum is None:
+            continue
+        try:
+            previous_signal_handlers[signum] = signal.getsignal(signum)
+            signal.signal(signum, _request_preemption_checkpoint)
+        except (OSError, RuntimeError, ValueError) as exc:
+            logging.debug("Could not install %s handler: %s", signal_name, exc)
+
+    def _preemption_requested() -> bool:
+        return bool(preemption_state["requested"])
+
+    def _save_preemption_checkpoint(checkpoint_epoch: int) -> bool:
+        if rank != 0:
+            return True
+        if not save_checkpoints:
+            logging.warning(
+                "Preemption requested but checkpoint saving is disabled; exiting without a new checkpoint."
+            )
+            return False
+        logging.warning(
+            "Saving preemption checkpoint at epoch %s before exiting.",
+            checkpoint_epoch,
+        )
+        param_context = ema.average_parameters() if ema is not None else nullcontext()
+        with param_context:
+            checkpoint_handler.save(
+                state=CheckpointState(model, optimizer, lr_scheduler, scaler),
+                epochs=checkpoint_epoch,
+                keep_last=True,
+            )
+        return True
+
+    def _exit_after_preemption_checkpoint(checkpoint_epoch: int) -> None:
+        checkpoint_saved = _save_preemption_checkpoint(checkpoint_epoch)
+        if distributed:
+            torch.distributed.barrier()
+        if not checkpoint_saved:
+            logging.warning("Exiting after preemption request without requeue signal.")
+            raise SystemExit(1)
+        logging.warning(
+            "Exiting after preemption checkpoint with code %s; batch script will requeue.",
+            PREEMPTION_CHECKPOINT_EXIT_CODE,
+        )
+        for signum, handler in previous_signal_handlers.items():
+            signal.signal(signum, handler)
+        raise SystemExit(PREEMPTION_CHECKPOINT_EXIT_CODE)
 
     logging.info("")
     logging.info("===========TRAINING===========")
@@ -244,12 +371,20 @@ def train(
             amp_enabled=amp_enabled,
             amp_dtype=amp_dtype,
         )
+        _raise_if_validation_mostly_nan(
+            valid_loss_head, eval_metrics, valid_loader_name, None
+        )
         valid_err_log(
             valid_loss_head, eval_metrics, logger, log_errors, None, valid_loader_name
         )
     valid_loss = valid_loss_head  # consider only the last head for the checkpoint
+    if _preemption_requested():
+        _exit_after_preemption_checkpoint(epoch)
 
     while epoch < max_num_epochs:
+        if _preemption_requested():
+            _exit_after_preemption_checkpoint(epoch)
+
         # LR scheduler and SWA update
         if swa is None or epoch < swa.start:
             if epoch > start_epoch:
@@ -291,10 +426,14 @@ def train(
             scaler=scaler,
             amp_enabled=amp_enabled,
             amp_dtype=amp_dtype,
+            should_stop=_preemption_requested,
+            log_interval=log_interval,
         )
         epoch_time = time.time() - epoch_start_time
         if distributed:
             torch.distributed.barrier()
+        if _preemption_requested():
+            _exit_after_preemption_checkpoint(epoch)
         if log_wandb:
             # Try to get the learning rate
             lr = None
@@ -310,13 +449,14 @@ def train(
             log_data = {
                 "train/loss": avg_epoch_loss,
                 "train/epoch": epoch,
+                "epoch": epoch,
                 "train/time_per_epoch": epoch_time,
             }
             if lr is not None:
                 log_data["train/lr"] = lr
-            wandb.log(log_data, step=epoch)
+            wandb.log(log_data)
         # Validate
-        if epoch % eval_interval == 0:
+        if epoch > 0 and (epoch % eval_interval == 0):
             model_to_evaluate = (
                 model if distributed_model is None else distributed_model
             )
@@ -337,6 +477,9 @@ def train(
                         amp_enabled=amp_enabled,
                         amp_dtype=amp_dtype,
                     )
+                    _raise_if_validation_mostly_nan(
+                        valid_loss_head, eval_metrics, valid_loader_name, epoch
+                    )
                     if rank == 0:
                         valid_err_log(
                             valid_loss_head,
@@ -355,6 +498,7 @@ def train(
                                 # ],
                                 # "valid_rmse_f": eval_metrics["rmse_f"],
                             }
+                            wandb_log_dict["epoch"] = epoch
                             # if "mae_h" in eval_metrics:
                             #     wandb_log_dict[valid_loader_name]["valid_mae_h"] = eval_metrics["mae_h"]
                             _name = "valid"
@@ -371,7 +515,7 @@ def train(
                     valid_loss_head  # consider only the last head for the checkpoint
                 )
             if log_wandb:
-                wandb.log(wandb_log_dict, step=epoch)
+                wandb.log(wandb_log_dict)
             if rank == 0:
                 if valid_loss >= lowest_loss:
                     patience_counter += 1
@@ -395,7 +539,7 @@ def train(
                         )
                         with param_context:
                             checkpoint_handler.save(
-                                state=CheckpointState(model, optimizer, lr_scheduler),
+                                state=CheckpointState(model, optimizer, lr_scheduler, scaler),
                                 epochs=epoch,
                                 keep_last=True,
                             )
@@ -409,7 +553,7 @@ def train(
                     if save_checkpoints:
                         with param_context:
                             checkpoint_handler.save(
-                                state=CheckpointState(model, optimizer, lr_scheduler),
+                                state=CheckpointState(model, optimizer, lr_scheduler, scaler),
                                 epochs=epoch,
                                 keep_last=keep_last,
                             )
@@ -439,10 +583,12 @@ def train_one_epoch(
     scaler: Optional[torch.cuda.amp.GradScaler] = None,
     amp_enabled: bool = False,
     amp_dtype: torch.dtype = torch.float32,
+    should_stop=None,
+    log_interval: int = 50,
 ) -> float:
     model_to_train = model if distributed_model is None else distributed_model
 
-    total_loss = 0.0
+    total_loss = None
     total_samples = 0
 
     if isinstance(optimizer, LBFGS):
@@ -460,14 +606,17 @@ def train_one_epoch(
             distributed=distributed,
             rank=rank,
         )
-        total_loss = loss
+        total_loss = loss.item() if torch.is_tensor(loss) else float(loss)
         total_samples = len(data_loader)
         opt_metrics["mode"] = "opt"
         opt_metrics["epoch"] = epoch
+        opt_metrics["loss"] = total_loss
         if rank == 0:
             logger.log(opt_metrics)
     else:
-        for batch in data_loader:
+        for step_idx, batch in enumerate(data_loader):
+            if should_stop is not None and should_stop():
+                break
             if samples_per_epoch is not None and total_samples >= samples_per_epoch:
                 break
             loss, opt_metrics = take_step(
@@ -484,15 +633,25 @@ def train_one_epoch(
                 amp_dtype=amp_dtype,
             )
             batch_size = getattr(batch, "num_graphs", 1)
-            total_loss += float(loss) * batch_size
+            if total_loss is None:
+                total_loss = loss.new_zeros(())
+            total_loss = total_loss + loss * batch_size
             total_samples += batch_size
-            opt_metrics["mode"] = "opt"
-            opt_metrics["epoch"] = epoch
-            if rank == 0:
+            if rank == 0 and log_interval > 0 and (
+                step_idx == 0 or (step_idx + 1) % log_interval == 0
+            ):
+                opt_metrics["loss"] = loss.item()
+                opt_metrics["mode"] = "opt"
+                opt_metrics["epoch"] = epoch
+                opt_metrics["step"] = step_idx
                 logger.log(opt_metrics)
+            if should_stop is not None and should_stop():
+                break
             if samples_per_epoch is not None and total_samples >= samples_per_epoch:
                 break
-    avg_loss = total_loss / max(total_samples, 1)
+    if total_loss is None:
+        return 0.0
+    avg_loss = (total_loss / max(total_samples, 1)).item()
     return avg_loss
 
 
@@ -554,9 +713,8 @@ def take_step(
     if ema is not None:
         ema.update()
 
-    loss = loss.detach().cpu()
+    loss = loss.detach()
     loss_dict = {
-        "loss": to_numpy(loss),
         "time": time.time() - start_time,
     }
 
@@ -653,11 +811,10 @@ def take_step_lbfgs(
         ema.update()
 
     loss_dict = {
-        "loss": to_numpy(loss),
         "time": time.time() - start_time,
     }
 
-    return loss, loss_dict
+    return loss.detach(), loss_dict
 
 
 def evaluate(
@@ -678,6 +835,12 @@ def evaluate(
     # Initialize eckart metrics accumulators if hessians are predicted
     eckart_eigval_maes = []
     eckart_eigvec_cosines = []
+    eckart_eigval_mae_1_list = []
+    eckart_eigval_mae_2_list = []
+    eckart_eigvec_cos_1_list = []
+    eckart_eigvec_cos_2_list = []
+    fraction_zero_hessian_list = []
+    eckart_frequency_skipped = 0
     
     # Get z_table from model for converting node_attrs to atomic numbers
     z_table = None
@@ -705,11 +868,10 @@ def evaluate(
 
         # If hessians are predicted, compute eckart metrics
         if output_args["hip"] and output.get("hessian") is not None and batch.hessian is not None and z_table is not None:
-            aux["eckart_eigval_mae_1_list"] = []
-            aux["eckart_eigval_mae_2_list"] = []
-            aux["eckart_eigvec_cos_1_list"] = []
-            aux["eckart_eigvec_cos_2_list"] = []
-            aux["fraction_zero_hessian_list"] = []
+            # NOTE: accumulators (eckart_eigval_mae_1_list etc.) live outside `aux`,
+            # since `aux` is a fresh dict returned by `metrics(...)` on every batch and
+            # gets replaced wholesale by `metrics.compute()` after the loop, which
+            # previously discarded lists stored on it.
             # Loop over samples in batch
             num_graphs = batch.num_graphs
             hessian_offset = 0
@@ -732,27 +894,39 @@ def evaluate(
                 num_zero = torch.sum(hessian_pred == 0)
                 num_total = hessian_pred.numel()
                 fraction_zero_hessian = num_zero.item() / num_total
-                aux["fraction_zero_hessian_list"].append(fraction_zero_hessian)
+                fraction_zero_hessian_list.append(fraction_zero_hessian)
 
-                # Extract positions for this sample
-                positions = batch.positions[batch.ptr[i]:batch.ptr[i+1]] # (N, 3)
+                # Frequency analysis is diagnostic only. Keep it on CPU so a
+                # failed eigensolve does not poison the CUDA validation stream.
+                positions = batch.positions[batch.ptr[i]:batch.ptr[i+1]].detach().cpu() # (N, 3)
+                hessian_pred_cpu = hessian_pred.detach().cpu()
+                hessian_true_cpu = hessian_true.detach().cpu()
 
                 # Convert node_attrs to atomic numbers
                 node_attrs_sample = batch.node_attrs[batch.ptr[i]:batch.ptr[i+1]] # (N, Z_table.num_z)
-                atomic_numbers = torch.tensor([z_table.index_to_z(z) for z in node_attrs_sample.argmax(dim=-1)], device=device)
-                symbols = [Z_TO_ATOM_SYMBOL[z.item()] for z in atomic_numbers]
+                atomic_number_indices = node_attrs_sample.argmax(dim=-1).detach().cpu().tolist()
+                symbols = [Z_TO_ATOM_SYMBOL[z_table.index_to_z(z)] for z in atomic_number_indices]
 
-                # Analyze frequencies with eckart projection using torch version
-                freqs_pred = analyze_frequencies_torch(
-                    hessian=hessian_pred,
-                    cart_coords=positions,
-                    atomsymbols=symbols,
-                )
-                freqs_true = analyze_frequencies_torch(
-                    hessian=hessian_true,
-                    cart_coords=positions,
-                    atomsymbols=symbols,
-                )
+                try:
+                    # Analyze frequencies with eckart projection using torch version
+                    freqs_pred = analyze_frequencies_torch(
+                        hessian=hessian_pred_cpu,
+                        cart_coords=positions,
+                        atomsymbols=symbols,
+                    )
+                    freqs_true = analyze_frequencies_torch(
+                        hessian=hessian_true_cpu,
+                        cart_coords=positions,
+                        atomsymbols=symbols,
+                    )
+                except Exception as exc:  # pylint: disable=broad-exception-caught
+                    eckart_frequency_skipped += 1
+                    logging.debug(
+                        "Skipping frequency analysis for validation sample %s: %s",
+                        i,
+                        exc,
+                    )
+                    continue
 
                 # Compute eckart eigenvalue MAEs for j=0 (mode 1) and j=1 (mode 2)
                 eigvals_pred = freqs_pred["eigvals"]
@@ -771,12 +945,12 @@ def evaluate(
                     cos_sim_2,
                 ])
                 # Store val MAE for mode 1 and 2 individually
-                aux["eckart_eigval_mae_1_list"].append(eigval_mae_1)
-                aux["eckart_eigval_mae_2_list"].append(eigval_mae_2)
+                eckart_eigval_mae_1_list.append(eigval_mae_1)
+                eckart_eigval_mae_2_list.append(eigval_mae_2)
 
                 # Store vec cosine for mode 1 and 2 individually
-                aux["eckart_eigvec_cos_1_list"].append(cos_sim_1)
-                aux["eckart_eigvec_cos_2_list"].append(cos_sim_2)
+                eckart_eigvec_cos_1_list.append(cos_sim_1)
+                eckart_eigvec_cos_2_list.append(cos_sim_2)
 
         # Limit evaluation to max_samples if specified
         if max_samples is not None:
@@ -791,16 +965,16 @@ def evaluate(
     # Add eckart metrics to aux if computed
     if eckart_eigval_maes:
         aux["eckart_eigval_mae"] = np.mean(eckart_eigval_maes)
-        # Log averages for mode 1 and 2 separately
-        if "eckart_eigval_mae_1_list" in aux and len(aux["eckart_eigval_mae_1_list"]) > 0:
-            aux["eckart_eigval_mae_1"] = np.nanmean(aux["eckart_eigval_mae_1_list"])
-        if "eckart_eigval_mae_2_list" in aux and len(aux["eckart_eigval_mae_2_list"]) > 0:
-            aux["eckart_eigval_mae_2"] = np.nanmean(aux["eckart_eigval_mae_2_list"])
+        # Log averages for mode 1 (lowest mode) and mode 2 separately
+        if eckart_eigval_mae_1_list:
+            aux["eckart_eigval_mae_1"] = np.nanmean(eckart_eigval_mae_1_list)
+        if eckart_eigval_mae_2_list:
+            aux["eckart_eigval_mae_2"] = np.nanmean(eckart_eigval_mae_2_list)
         # Compute cosine averages for mode 1 and 2
-        if "eckart_eigvec_cos_1_list" in aux and len(aux["eckart_eigvec_cos_1_list"]) > 0:
-            aux["eckart_eigvec_cos_1"] = np.nanmean(aux["eckart_eigvec_cos_1_list"])
-        if "eckart_eigvec_cos_2_list" in aux and len(aux["eckart_eigvec_cos_2_list"]) > 0:
-            aux["eckart_eigvec_cos_2"] = np.nanmean(aux["eckart_eigvec_cos_2_list"])
+        if eckart_eigvec_cos_1_list:
+            aux["eckart_eigvec_cos_v1"] = np.nanmean(eckart_eigvec_cos_1_list)
+        if eckart_eigvec_cos_2_list:
+            aux["eckart_eigvec_cos_v2"] = np.nanmean(eckart_eigvec_cos_2_list)
         # For backward compatibility (legacy averaging)
         if eckart_eigvec_cosines:
             arr = np.array(eckart_eigvec_cosines)
@@ -808,6 +982,11 @@ def evaluate(
                 aux["eckart_eigvec_cos"] = np.nanmean(arr)
             else:
                 aux["eckart_eigvec_cos"] = float("nan")
+        if fraction_zero_hessian_list:
+            aux["fraction_zero_hessian"] = np.nanmean(fraction_zero_hessian_list)
+
+    if eckart_frequency_skipped:
+        aux["eckart_frequency_skipped_samples"] = eckart_frequency_skipped
 
     metrics.reset()
 
@@ -831,6 +1010,8 @@ class MACELoss(Metric):
         self.add_state("delta_fs", default=[], dist_reduce_fx="cat")
         self.add_state("H_computed", default=torch.tensor(0.0), dist_reduce_fx="sum")
         self.add_state("delta_hs", default=[], dist_reduce_fx="cat")
+        self.add_state("delta_hs_diag", default=[], dist_reduce_fx="cat")
+        self.add_state("delta_hs_off_diag", default=[], dist_reduce_fx="cat")
         # self.add_state("delta_hs_per_atom", default=[], dist_reduce_fx="cat")
         self.add_state(
             "stress_computed", default=torch.tensor(0.0), dist_reduce_fx="sum"
@@ -878,7 +1059,13 @@ class MACELoss(Metric):
             )
         # for HIP
         if output.get("hessian", None) is not None and batch.hessian is not None:
-            self.delta_hs.append(batch.hessian - output["hessian"])
+            delta_hs = batch.hessian - output["hessian"]
+            self.delta_hs.append(delta_hs)
+            diag_delta_hs, off_diag_delta_hs = self._split_hessian_block_deltas(
+                delta_hs, batch.ptr
+            )
+            self.delta_hs_diag.extend(diag_delta_hs)
+            self.delta_hs_off_diag.extend(off_diag_delta_hs)
             self.H_computed += 1.0  # TODO@HIP add proper filtering
             # self.H_computed += filter_nonzero_weight(
             #     batch, self.delta_hs, batch.weight, batch.hessian_weight
@@ -935,6 +1122,44 @@ class MACELoss(Metric):
             delta = torch.cat(delta)
         return to_numpy(delta)
 
+    @staticmethod
+    def _has_values(delta: Union[torch.Tensor, List[torch.Tensor]]) -> bool:
+        if isinstance(delta, list):
+            return len(delta) > 0
+        return delta.numel() > 0
+
+    @staticmethod
+    def _split_hessian_block_deltas(
+        delta_hs: torch.Tensor, ptr: torch.Tensor
+    ) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
+        diag_delta_hs = []
+        off_diag_delta_hs = []
+        hessian_offset = 0
+
+        for n_atoms_tensor in ptr[1:] - ptr[:-1]:
+            n_atoms = int(n_atoms_tensor.item())
+            n_coords = n_atoms * 3
+            hessian_size = n_coords * n_coords
+            graph_delta_hs = delta_hs[hessian_offset : hessian_offset + hessian_size]
+            hessian_offset += hessian_size
+
+            if n_atoms == 0:
+                continue
+
+            block_delta_hs = graph_delta_hs.reshape(n_atoms, 3, n_atoms, 3).permute(
+                0, 2, 1, 3
+            )
+            atom_idx = torch.arange(n_atoms, device=delta_hs.device)
+            diag_delta_hs.append(block_delta_hs[atom_idx, atom_idx].reshape(-1))
+
+            if n_atoms > 1:
+                off_diag_mask = ~torch.eye(
+                    n_atoms, dtype=torch.bool, device=delta_hs.device
+                )
+                off_diag_delta_hs.append(block_delta_hs[off_diag_mask].reshape(-1))
+
+        return diag_delta_hs, off_diag_delta_hs
+
     def compute(self):
 
         class NoneMultiply:
@@ -972,6 +1197,12 @@ class MACELoss(Metric):
         if self.H_computed:
             delta_hs = self.convert(self.delta_hs)
             aux["mae_h"] = compute_mae(delta_hs)
+            if self._has_values(self.delta_hs_diag):
+                delta_hs_diag = self.convert(self.delta_hs_diag)
+                aux["mae_h_diag"] = compute_mae(delta_hs_diag)
+            if self._has_values(self.delta_hs_off_diag):
+                delta_hs_off_diag = self.convert(self.delta_hs_off_diag)
+                aux["mae_h_off_diag"] = compute_mae(delta_hs_off_diag)
         if self.stress_computed:
             delta_stress = self.convert(self.delta_stress)
             aux["mae_stress"] = compute_mae(delta_stress)

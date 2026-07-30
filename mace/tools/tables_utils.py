@@ -73,6 +73,16 @@ def create_error_table(
             "MAE F / meV / A",
             "relative F MAE %",
         ]
+    elif table_type == "TotalMAEHessian":
+        table.field_names = [
+            "config_type",
+            "MAE E / meV",
+            "MAE F / meV / A",
+            "relative F MAE %",
+            "MAE H / meV / A^2",
+            "MAE H diag / meV / A^2",
+            "MAE H off-diag / meV / A^2",
+        ]
     elif table_type == "PerAtomMAE":
         table.field_names = [
             "config_type",
@@ -141,6 +151,16 @@ def create_error_table(
                 name + "_final_rmse_f": metrics["rmse_f"] * 1e3,  # meV / A
                 name + "_final_rel_rmse_f": metrics["rel_rmse_f"],
             }
+            if metrics.get("mae_h") is not None:
+                wandb_log_dict[name + "_final_mae_h"] = metrics["mae_h"] * 1e3
+            if metrics.get("mae_h_diag") is not None:
+                wandb_log_dict[name + "_final_mae_h_diag"] = (
+                    metrics["mae_h_diag"] * 1e3
+                )
+            if metrics.get("mae_h_off_diag") is not None:
+                wandb_log_dict[name + "_final_mae_h_off_diag"] = (
+                    metrics["mae_h_off_diag"] * 1e3
+                )
             wandb.log(wandb_log_dict)
         if table_type == "TotalRMSE":
             table.add_row(
@@ -219,6 +239,18 @@ def create_error_table(
                     f"{metrics['mae_e'] * 1000:8.1f}",
                     f"{metrics['mae_f'] * 1000:8.1f}",
                     f"{metrics['rel_mae_f']:8.2f}",
+                ]
+            )
+        elif table_type == "TotalMAEHessian":
+            table.add_row(
+                [
+                    name,
+                    f"{metrics['mae_e'] * 1000:8.1f}",
+                    f"{metrics['mae_f'] * 1000:8.1f}",
+                    f"{metrics['rel_mae_f']:8.2f}",
+                    f"{metrics['mae_h'] * 1000:8.1f}",
+                    f"{metrics['mae_h_diag'] * 1000:8.1f}",
+                    f"{metrics['mae_h_off_diag'] * 1000:8.1f}",
                 ]
             )
         elif table_type == "PerAtomMAE":
