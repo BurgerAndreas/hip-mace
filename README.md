@@ -8,18 +8,62 @@ HIP was introduced in our paper https://arxiv.org/abs/2509.21624
 
 The original implementation of HIP for EquiformerV2 is here: https://github.com/BurgerAndreas/hip
 
-## HORM t1x results (512, CuEq, 1000 epochs)
+## HORM-T1x results
 
-Means over 10k `ts1x-val` samples. Energy / force / Hessian MAE in meV / meV·Å⁻¹ / meV·Å⁻².
-Eigval / eigvec metrics use Eckart (mass-weighted) projection.
+As expected, autograd Hessians are much worse than HIP predicted ones, and ~30x slower per sample on average on these small molecules.
 
-| Head | E ↓ | F ↓ | H ↓ | eigval MAE ↓ | 1st eigvec cos mean ↑ | 1st eigvec cos median ↑ |
-|:-----|----:|----:|----:|-------------:|----------------------:|------------------------:|
-| **pair_v2 (released)** | **29.2** | **34.0** | **70.4** | **0.0387** | **0.906** | **0.988** |
-| message_v1 | 30.6 | 35.0 | 71.5 | 0.0396 | 0.903 | 0.988 |
-| eqv2_v1 | 35.0 | 37.6 | 74.5 | 0.0414 | 0.901 | 0.986 |
+| Method | E (meV) ↓ | F (meV·Å⁻¹) ↓ | H meV·Å⁻² ↓ | eigval MAE ↓ | 1st eigvec cos mean ↑ | 1st eigvec cos median ↑ | time (ms) ↓ |
+|:-------|----:|----:|----:|-------------:|----------------------:|------------------------:|------------:|
+| HIP predict | 29.3 | 33.9 | **70.2** | **0.0386** | **0.906** | **0.989** | **86.3** |
+| Energy autograd ∂²E/∂r² | 29.3 | 33.9 | 309.2 | 0.7005 | 0.958 | 0.997 | 2508 |
 
-`pair_v2` is the released HIP head. The other rows are historical comparisons. Setup: `hidden_irreps` / Hessian head dim 512, `lr=0.08`, loss weights e1 / f10 / h25, batch 64, 100 warmup + 1000 epochs, `only_cueq=true`, HIP predicted Hessians.
+Setup: hidden_irreps and hessian head dim 512, lr=0.08, loss weights e1 / f10 / h25, batch 64, 100 warmup + 1000 epochs, only_cueq=true.
+Means over the ts1x-val set. Eigvalue and eigvectir metrics use Eckart (mass-weighted) projection. 
+Time is measured as the model forward (E/F + Hessian) using CUDA-events, in ms/sample.
+
+### HORM-T1x E0 reference and normalization
+
+The current checkpoints were incorrectly trained with Transition1x isolated-atom reference E0s and normalization statistics computed with zero E0s. 
+Fitting all 1,725,362 training geometries instead gives a residual energy MAE of 0.110 eV/atom, compared with 4.259 eV/atom using the Transition1x references. 
+Future HORM-T1x runs should instead use:
+
+```yaml
+atomic_numbers: "[1, 6, 7, 8]"
+E0s: "{1: -16.71286055092946, 6: -1035.5222423901348, 7: -1489.1419582366752, 8: -2046.2408339051071}"
+mean: 0.006128199456958379
+std: 0.13583519684389536
+```
+
+### Download the pretrained checkpoint
+
+Weights: [huggingface.co/andreasburger/hip](https://huggingface.co/andreasburger/hip) (`ckpt/hip_mace.model` + `ckpt/hip_mace.yaml`).
+
+```bash
+uv sync
+mkdir -p checkpoints/hip_mace
+uv run hf download andreasburger/hip ckpt/hip_mace.model ckpt/hip_mace.yaml --local-dir /tmp/hip_mace_dl
+cp /tmp/hip_mace_dl/ckpt/hip_mace.model /tmp/hip_mace_dl/ckpt/hip_mace.yaml checkpoints/hip_mace/
+ln -sfn hip_mace.yaml checkpoints/hip_mace/config.yaml
+```
+
+Eval on HORM val (HIP predicted Hessians; use a GPU node / Slurm for anything large):
+
+```bash
+export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
+uv run scripts/eval_horm.py checkpoints/hip_mace \
+  --max_samples 1000 --valid_file ./data/ts1x/ts1x-val --hessian_method=predict
+```
+
+ASE calculator (energy / forces):
+
+```python
+from ase import Atoms
+from mace.calculators import MACECalculator
+
+atoms = Atoms("H2O", positions=[[0, 0, 0], [0.96, 0, 0], [-0.24, 0.93, 0]])
+atoms.calc = MACECalculator(model_paths="checkpoints/hip_mace/hip_mace.model", device="cuda")
+print(atoms.get_potential_energy(), atoms.get_forces())
+```
 
 ### Train on Slurm
 

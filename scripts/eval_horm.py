@@ -104,7 +104,9 @@ def evaluate_hessian_on_horm_dataset(
     redo=False,
 ):
     print("\n\n--- Evaluating Hessian on HORM dataset ---")
-    hessian_method = "predict" if args.hip else "autograd"
+    hessian_method = getattr(args, "hessian_method", None)
+    if hessian_method in (None, "auto"):
+        hessian_method = "predict" if args.hip else "autograd"
     print("Hessian method: ", hessian_method)
     
     # checkpoint usually looks like this:
@@ -198,10 +200,8 @@ def evaluate_hessian_on_horm_dataset(
         f"{results_dir}/{ckpt_name}_{dataset_name}_{hessian_method}_metrics.csv"
     )
 
-    if os.path.exists(results_file) and not redo:
-        print(f"Loading existing results from {results_file}")
-        df_results = pd.read_csv(results_file)
-        aggregated_results = {
+    def _aggregate(df_results: pd.DataFrame) -> dict:
+        return {
             "energy_mae": df_results["energy_error"].mean(),
             "forces_mae": df_results["forces_error"].mean(),
             "hessian_mae": df_results["hessian_error"].mean(),
@@ -228,17 +228,38 @@ def evaluate_hessian_on_horm_dataset(
             "model_is_minima": df_results["model_is_minima"].mean(),
             "model_is_ts_order2": df_results["model_is_ts_order2"].mean(),
             "model_is_higher_order": df_results["model_is_higher_order"].mean(),
-            "is_ts_agree": (df_results["model_is_ts"] == df_results["true_is_ts"]).mean(),
+            "is_ts_agree": (
+                df_results["model_is_ts"] == df_results["true_is_ts"]
+            ).mean(),
             "time": df_results["time"].mean(),
             "memory": df_results["memory"].mean(),
             "hessian_fraction_zero": df_results["hessian_fraction_zero"].mean(),
         }
-        return df_results, aggregated_results
 
-
+    n_total_samples = (
+        min(len(dataset), max_samples) if max_samples is not None else len(dataset)
+    )
     sample_metrics = []
+    start_idx = 0
+
+    if os.path.exists(results_file) and redo:
+        print(f"--redo set; removing existing results at {results_file}")
+        os.remove(results_file)
+
+    if os.path.exists(results_file):
+        print(f"Loading existing results from {results_file}")
+        df_existing = pd.read_csv(results_file)
+        if len(df_existing) >= n_total_samples:
+            aggregated_results = _aggregate(df_existing)
+            return df_existing, aggregated_results
+        sample_metrics = df_existing.to_dict("records")
+        start_idx = int(df_existing["sample_idx"].max()) + 1
+        print(
+            f"Resuming eval from sample_idx={start_idx} "
+            f"({len(df_existing)}/{n_total_samples} done)"
+        )
+
     n_samples = 0
-    n_total_samples = min(len(dataset), max_samples) if max_samples is not None else len(dataset)
 
     # Setup wandb if needed
     wandb.init(
@@ -258,9 +279,13 @@ def evaluate_hessian_on_horm_dataset(
 
     # Main evaluation loop
     for batch in tqdm(dataloader, desc="Evaluating", total=n_total_samples):
+        if n_samples < start_idx:
+            n_samples += 1
+            continue
+
         batch = batch.to(device)
         n_atoms = batch["positions"].shape[0]
-        if n_samples == 0:
+        if n_samples == start_idx:
             print(batch.keys)
 
         # TIMING for hessian only (not I/O)
@@ -401,6 +426,8 @@ def evaluate_hessian_on_horm_dataset(
 
         sample_metrics.append(sample_data)
         n_samples += 1
+        # Checkpoint progress after each sample so Slurm requeues can resume.
+        pd.DataFrame(sample_metrics).to_csv(results_file, index=False)
         torch.cuda.empty_cache()
 
         if max_samples is not None and n_samples >= max_samples:
@@ -412,42 +439,7 @@ def evaluate_hessian_on_horm_dataset(
     print(f"Saved results to {results_file}")
 
     # Aggregate
-    aggregated_results = {
-        "energy_mae": df_results["energy_error"].mean(),
-        "forces_mae": df_results["forces_error"].mean(),
-        "hessian_mae": df_results["hessian_error"].mean(),
-        "asymmetry_mae": df_results["asymmetry_error"].mean(),
-        "true_asymmetry_mae": df_results["true_asymmetry_error"].mean(),
-        "eigval_mae": df_results["eigval_mae"].mean(),
-        "eigval1_mae": df_results["eigval1_mae"].mean(),
-        "eigval2_mae": df_results["eigval2_mae"].mean(),
-        "eigvec1_cos": df_results["eigvec1_cos"].mean(),
-        "eigvec2_cos": df_results["eigvec2_cos"].mean(),
-        # Eckart projection
-        "eigval_mae_eckart": df_results["eigval_mae_eckart"].mean(),
-        "eigval1_mae_eckart": df_results["eigval1_mae_eckart"].mean(),
-        "eigval2_mae_eckart": df_results["eigval2_mae_eckart"].mean(),
-        "eigvec1_cos_eckart": df_results["eigvec1_cos_eckart"].mean(),
-        "eigvec2_cos_eckart": df_results["eigvec2_cos_eckart"].mean(),
-        # Frequencies
-        "neg_num_agree": df_results["neg_num_agree"].mean(),
-        "true_neg_num": df_results["true_neg_num"].mean(),
-        "model_neg_num": df_results["model_neg_num"].mean(),
-        "true_is_ts": df_results["true_is_ts"].mean(),
-        "true_is_minima": df_results["true_is_minima"].mean(),
-        "true_is_ts_order2": df_results["true_is_ts_order2"].mean(),
-        "true_is_higher_order": df_results["true_is_higher_order"].mean(),
-        "model_is_ts": df_results["model_is_ts"].mean(),
-        "model_is_minima": df_results["model_is_minima"].mean(),
-        "model_is_ts_order2": df_results["model_is_ts_order2"].mean(),
-        "model_is_higher_order": df_results["model_is_higher_order"].mean(),
-        "is_ts_agree": (df_results["model_is_ts"] == df_results["true_is_ts"]).mean(),
-        # Speed
-        "time": df_results["time"].mean(),  # ms
-        "memory": df_results["memory"].mean(),
-        # Hessian zeros
-        "hessian_fraction_zero": df_results["hessian_fraction_zero"].mean(),
-    }
+    aggregated_results = _aggregate(df_results)
 
     wandb.log(aggregated_results)
     wandb.finish()
@@ -498,7 +490,7 @@ if __name__ == "__main__":
         "-r",
         action="store_true",
         default=False,
-        help="Run eval from scratch even if results already exist",
+        help="Discard existing/partial metrics CSV and start eval from scratch",
     )
 
     # Device
@@ -513,6 +505,13 @@ if __name__ == "__main__":
         action="store_true",
         default=False,
         help="Enable CuEq acceleration",
+    )
+    parser.add_argument(
+        "--hessian_method",
+        type=str,
+        choices=["auto", "predict", "autograd"],
+        default="auto",
+        help="Hessian source: predict (HIP head), autograd, or auto from training config hip flag",
     )
 
     args = parser.parse_args()
@@ -552,12 +551,15 @@ if __name__ == "__main__":
     args.default_dtype = config["default_dtype"]
     if "wandb_project" in config:
         args.wandb_project = config["wandb_project"]
+    if args.hessian_method == "auto":
+        args.hessian_method = "predict" if args.hip else "autograd"
 
     # Validation file: command-line overrides config
     if args.valid_file is None:
         args.valid_file = config["valid_file"]
 
     print(f"Training config: hip={args.hip}, predict_hessian={args.predict_hessian}, "
+          f"hessian_method={args.hessian_method}, "
           f"default_dtype={args.default_dtype}, r_max={args.r_max}")
 
     torch.manual_seed(42)
