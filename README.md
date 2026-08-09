@@ -67,14 +67,19 @@ print(atoms.get_potential_energy(), atoms.get_forces())
 
 ### Train on Slurm
 
+Submit from the repository root. Pass site-specific flags (`-A`, `-p`, …) yourself:
+
 ```bash
-cd /lustre/fs12/portfolios/nvr/projects/nvr_qualg_lmbm/users/anburger/hip-mace && export HIP_MACE_PROJECT_DIR="$PWD" && sbatch --partition=polar4 --job-name=horm-pairv2-512 scripts/run_batch_singlenode_uv.sbatch mace/cli/run_train.py --config=configs/horm_t1x_hip_pairv2_512_mae.yaml --no_restart_latest
+sbatch -J horm-pairv2-512 scripts/run_with_requeue.sbatch \
+  mace/cli/run_train.py --config=configs/horm_t1x_hip_pairv2_512_mae.yaml --no_restart_latest
 ```
 
 ### Evaluate on Slurm
 
 ```bash
-cd /lustre/fs12/portfolios/nvr/projects/nvr_qualg_lmbm/users/anburger/hip-mace && export HIP_MACE_PROJECT_DIR="$PWD" && sbatch --partition=polar4 --job-name=eval-pairv2 scripts/run_batch_singlenode_uv.sbatch scripts/eval_horm.py checkpoints/horm_t1x_hip_pairv2_512_lr0p08_mae_e1_f10_h25_1000_wu100_cueq_bs64 --max_samples 10000 --valid_file ./data/ts1x/ts1x-val --redo
+sbatch -J eval-pairv2 scripts/run_with_requeue.sbatch \
+  scripts/eval_horm.py checkpoints/horm_t1x_hip_pairv2_512_lr0p08_mae_e1_f10_h25_1000_wu100_cueq_bs64 \
+  --max_samples 10000 --valid_file ./data/ts1x/ts1x-val --redo
 ```
 
 ### Training HIP-MACE

@@ -46,6 +46,10 @@ slurmlog/
 outslurm/
 core.*
 
+# Local site-specific Slurm launchers (not for public tree)
+scripts/run_batch_singlenode_uv.sbatch
+scripts/run_cpu_uv.sbatch
+
 **/*.model
 .github
 /data/ts1x/

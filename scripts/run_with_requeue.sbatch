@@ -1,22 +1,28 @@
 #!/usr/bin/env bash
-#SBATCH -A nvr_qualg_lmbm
+# Portable Slurm launcher with preemption/time-limit requeue support.
+# Submit from the repository root. Pass account/partition/time/resources via
+# sbatch flags (or site defaults), for example:
+#   sbatch -A ACCOUNT -p PARTITION -J JOBNAME scripts/run_with_requeue.sbatch \
+#     mace/cli/run_train.py --config=configs/CONFIG.yaml --no_restart_latest
+#
 #SBATCH -J hip_mace
-#SBATCH -p batch_singlenode
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH -t 4:00:00
 #SBATCH --requeue
 #SBATCH --signal=B:USR1@1800
-#SBATCH --output=/lustre/fs12/portfolios/nvr/projects/nvr_qualg_lmbm/users/anburger/hip-mace/outslurm/slurm-%j.out
+#SBATCH --output=outslurm/slurm-%j.out
 
 set -euo pipefail
 
-cd /lustre/fs12/portfolios/nvr/projects/nvr_qualg_lmbm/users/anburger/hip-mace
+REPO_ROOT="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+cd "$REPO_ROOT"
+mkdir -p outslurm
 
-export HIP_MACE_PROJECT_DIR="$PWD"
-export HIP_MACE_SCRATCH_DIR="$PWD"
-export HIP_MACE_VENV="$PWD/.venv"
+export HIP_MACE_PROJECT_DIR="${HIP_MACE_PROJECT_DIR:-$PWD}"
+export HIP_MACE_SCRATCH_DIR="${HIP_MACE_SCRATCH_DIR:-$PWD}"
+export HIP_MACE_VENV="${HIP_MACE_VENV:-$PWD/.venv}"
 export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
 
 source scripts/setup_cuda.sh
